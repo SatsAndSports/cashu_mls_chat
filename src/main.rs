@@ -786,10 +786,10 @@ impl ChatApp {
                                         }
                                     }
 
-                                    // Send token as MLS message to group
+                                    // Send token as MLS message to group (just the raw token string)
                                     let send_result = state.send_message(
                                         user_index,
-                                        format!("🎁 Cashu token ({} sats): {}", amount, token)
+                                        token.to_string()
                                     ).await;
 
                                     match send_result {
