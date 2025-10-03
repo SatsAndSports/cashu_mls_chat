@@ -8,10 +8,12 @@ use tracing_subscriber::FmtSubscriber;
 
 // MDK imports
 use mdk_core::prelude::*;
-use mdk_memory_storage::MdkMemoryStorage;
+use mdk_sqlite_storage::MdkSqliteStorage;
 use nostr::event::builder::EventBuilder;
 use nostr::{EventId, Keys, Kind, RelayUrl};
 use nostr_sdk::{Client, Filter, RelayPoolNotification};
+use std::fs;
+use std::path::Path;
 
 // CDK imports
 use cdk::Amount;
@@ -24,7 +26,7 @@ use cdk_sqlite::WalletSqliteDatabase;
 struct User {
     name: String,
     keys: Keys,
-    mdk: Arc<Mutex<MDK<MdkMemoryStorage>>>,
+    mdk: Arc<Mutex<MDK<MdkSqliteStorage>>>,
     wallet: Wallet,
     mls_group_id: Option<GroupId>,
     nostr_client: Client,
@@ -46,6 +48,33 @@ struct AppState {
     balances: Arc<Mutex<Vec<u64>>>, // Cached balances for each user
 }
 
+// Helper functions for key persistence
+fn save_keys(name: &str, keys: &Keys) -> Result<()> {
+    let keys_dir = Path::new("./keys");
+    fs::create_dir_all(keys_dir)?;
+    let key_file = keys_dir.join(format!("{}.key", name));
+    let secret_key_hex = keys.secret_key().to_secret_hex();
+    fs::write(key_file, secret_key_hex)?;
+    Ok(())
+}
+
+fn load_or_create_keys(name: &str) -> Result<Keys> {
+    let keys_dir = Path::new("./keys");
+    let key_file = keys_dir.join(format!("{}.key", name));
+
+    if key_file.exists() {
+        let secret_key_hex = fs::read_to_string(key_file)?;
+        let keys = Keys::parse(&secret_key_hex)?;
+        tracing::info!("{} loaded existing keys: {}", name, keys.public_key());
+        Ok(keys)
+    } else {
+        let keys = Keys::generate();
+        save_keys(name, &keys)?;
+        tracing::info!("{} generated new keys: {}", name, keys.public_key());
+        Ok(keys)
+    }
+}
+
 impl AppState {
     async fn new(relay_mode: bool) -> Result<Self> {
         // Use local relay
@@ -63,9 +92,10 @@ impl AppState {
         let mint_url = MintUrl::from_str("https://nofees.testnut.cashu.space")?;
         tracing::info!("Using mint: {}", mint_url);
 
-        // Create three users
-        let alice_keys = Keys::generate();
-        let alice_mdk = Arc::new(Mutex::new(MDK::new(MdkMemoryStorage::default())));
+        // Create three users with persistent keys and storage
+        let alice_keys = load_or_create_keys("alice")?;
+        let alice_storage = MdkSqliteStorage::new("./mdk_storage/alice.db")?;
+        let alice_mdk = Arc::new(Mutex::new(MDK::new(alice_storage)));
         let alice_client = Client::new(alice_keys.clone());
 
         // Create Alice's wallet with SQLite storage
@@ -79,8 +109,9 @@ impl AppState {
             .seed(alice_seed)
             .build()?;
 
-        let bob_keys = Keys::generate();
-        let bob_mdk = Arc::new(Mutex::new(MDK::new(MdkMemoryStorage::default())));
+        let bob_keys = load_or_create_keys("bob")?;
+        let bob_storage = MdkSqliteStorage::new("./mdk_storage/bob.db")?;
+        let bob_mdk = Arc::new(Mutex::new(MDK::new(bob_storage)));
         let bob_client = Client::new(bob_keys.clone());
 
         // Create Bob's wallet with SQLite storage
@@ -94,8 +125,9 @@ impl AppState {
             .seed(bob_seed)
             .build()?;
 
-        let carol_keys = Keys::generate();
-        let carol_mdk = Arc::new(Mutex::new(MDK::new(MdkMemoryStorage::default())));
+        let carol_keys = load_or_create_keys("carol")?;
+        let carol_storage = MdkSqliteStorage::new("./mdk_storage/carol.db")?;
+        let carol_mdk = Arc::new(Mutex::new(MDK::new(carol_storage)));
         let carol_client = Client::new(carol_keys.clone());
 
         // Create Carol's wallet with SQLite storage
@@ -116,109 +148,147 @@ impl AppState {
             carol_client.add_relay(relay_url.as_str()).await?;
         }
 
-        // Create key packages for Bob and Carol
-        let (bob_key_package, bob_tags) = bob_mdk
-            .lock()
-            .unwrap()
-            .create_key_package_for_event(&bob_keys.public_key(), relay_urls.clone())?;
+        // Check if groups already exist (for restarts)
+        let alice_groups = alice_mdk.lock().unwrap().get_groups()?;
+        let bob_groups = bob_mdk.lock().unwrap().get_groups()?;
+        let carol_groups = carol_mdk.lock().unwrap().get_groups()?;
 
-        let bob_key_package_event = EventBuilder::new(Kind::MlsKeyPackage, bob_key_package)
-            .tags(bob_tags)
-            .build(bob_keys.public_key())
-            .sign(&bob_keys)
-            .await?;
+        let (alice_group_id, bob_group_id, carol_group_id) = if !alice_groups.is_empty() && !bob_groups.is_empty() && !carol_groups.is_empty() {
+            // Groups exist, load them
+            let alice_group_id = alice_groups[0].mls_group_id.clone();
+            let bob_group_id = bob_groups[0].mls_group_id.clone();
+            let carol_group_id = carol_groups[0].mls_group_id.clone();
 
-        let (carol_key_package, carol_tags) = carol_mdk
-            .lock()
-            .unwrap()
-            .create_key_package_for_event(&carol_keys.public_key(), relay_urls.clone())?;
+            tracing::info!("Loaded existing group with ID: {}", hex::encode(alice_group_id.as_slice()));
+            (alice_group_id, bob_group_id, carol_group_id)
+        } else {
+            // Create new group
+            tracing::info!("No existing group found, creating new one...");
 
-        let carol_key_package_event = EventBuilder::new(Kind::MlsKeyPackage, carol_key_package)
-            .tags(carol_tags)
-            .build(carol_keys.public_key())
-            .sign(&carol_keys)
-            .await?;
+            // Create key packages for Bob and Carol
+            let (bob_key_package, bob_tags) = bob_mdk
+                .lock()
+                .unwrap()
+                .create_key_package_for_event(&bob_keys.public_key(), relay_urls.clone())?;
 
-        // Alice creates a group with Bob and Carol
-        let config = NostrGroupConfigData::new(
-            "Group Chat".to_string(),
-            "Demo group chat".to_string(),
-            None,
-            None,
-            None,
-            relay_urls.clone(),
-            vec![
-                alice_keys.public_key(),
-                bob_keys.public_key(),
-                carol_keys.public_key(),
-            ],
-        );
+            let bob_key_package_event = EventBuilder::new(Kind::MlsKeyPackage, bob_key_package)
+                .tags(bob_tags)
+                .build(bob_keys.public_key())
+                .sign(&bob_keys)
+                .await?;
 
-        let group_result = alice_mdk.lock().unwrap().create_group(
-            &alice_keys.public_key(),
-            vec![bob_key_package_event, carol_key_package_event],
-            config,
-        )?;
+            let (carol_key_package, carol_tags) = carol_mdk
+                .lock()
+                .unwrap()
+                .create_key_package_for_event(&carol_keys.public_key(), relay_urls.clone())?;
 
-        let alice_group_id = group_result.group.mls_group_id.clone();
+            let carol_key_package_event = EventBuilder::new(Kind::MlsKeyPackage, carol_key_package)
+                .tags(carol_tags)
+                .build(carol_keys.public_key())
+                .sign(&carol_keys)
+                .await?;
 
-        // Log the group ID for debugging
-        let group_id_hex = hex::encode(alice_group_id.as_slice());
-        tracing::info!("MLS Group created with ID: {}", group_id_hex);
+            // Alice creates a group with Bob and Carol
+            let config = NostrGroupConfigData::new(
+                "Group Chat".to_string(),
+                "Demo group chat".to_string(),
+                None,
+                None,
+                None,
+                relay_urls.clone(),
+                vec![
+                    alice_keys.public_key(),
+                    bob_keys.public_key(),
+                    carol_keys.public_key(),
+                ],
+            );
 
-        // Bob processes welcome and joins
-        let bob_welcome_rumor = &group_result.welcome_rumors[0];
-        bob_mdk
-            .lock()
-            .unwrap()
-            .process_welcome(&EventId::all_zeros(), bob_welcome_rumor)?;
-        let bob_welcomes = bob_mdk.lock().unwrap().get_pending_welcomes()?;
-        bob_mdk.lock().unwrap().accept_welcome(&bob_welcomes[0])?;
-        let bob_group_id = bob_mdk.lock().unwrap().get_groups()?[0]
-            .mls_group_id
-            .clone();
+            let group_result = alice_mdk.lock().unwrap().create_group(
+                &alice_keys.public_key(),
+                vec![bob_key_package_event, carol_key_package_event],
+                config,
+            )?;
 
-        // Carol processes welcome and joins
-        let carol_welcome_rumor = &group_result.welcome_rumors[1];
-        carol_mdk
-            .lock()
-            .unwrap()
-            .process_welcome(&EventId::all_zeros(), carol_welcome_rumor)?;
-        let carol_welcomes = carol_mdk.lock().unwrap().get_pending_welcomes()?;
-        carol_mdk
-            .lock()
-            .unwrap()
-            .accept_welcome(&carol_welcomes[0])?;
-        let carol_group_id = carol_mdk.lock().unwrap().get_groups()?[0]
-            .mls_group_id
-            .clone();
+            let alice_group_id = group_result.group.mls_group_id.clone();
+
+            // Log the group ID for debugging
+            let group_id_hex = hex::encode(alice_group_id.as_slice());
+            tracing::info!("MLS Group created with ID: {}", group_id_hex);
+
+            // Bob processes welcome and joins
+            let bob_welcome_rumor = &group_result.welcome_rumors[0];
+            bob_mdk
+                .lock()
+                .unwrap()
+                .process_welcome(&EventId::all_zeros(), bob_welcome_rumor)?;
+            let bob_welcomes = bob_mdk.lock().unwrap().get_pending_welcomes()?;
+            bob_mdk.lock().unwrap().accept_welcome(&bob_welcomes[0])?;
+            let bob_group_id = bob_mdk.lock().unwrap().get_groups()?[0]
+                .mls_group_id
+                .clone();
+
+            // Carol processes welcome and joins
+            let carol_welcome_rumor = &group_result.welcome_rumors[1];
+            carol_mdk
+                .lock()
+                .unwrap()
+                .process_welcome(&EventId::all_zeros(), carol_welcome_rumor)?;
+            let carol_welcomes = carol_mdk.lock().unwrap().get_pending_welcomes()?;
+            carol_mdk
+                .lock()
+                .unwrap()
+                .accept_welcome(&carol_welcomes[0])?;
+            let carol_group_id = carol_mdk.lock().unwrap().get_groups()?[0]
+                .mls_group_id
+                .clone();
+
+            (alice_group_id, bob_group_id, carol_group_id)
+        };
 
         let users = vec![
             User {
                 name: "Alice".to_string(),
                 keys: alice_keys,
-                mdk: alice_mdk,
+                mdk: alice_mdk.clone(),
                 wallet: alice_wallet,
-                mls_group_id: Some(alice_group_id),
+                mls_group_id: Some(alice_group_id.clone()),
                 nostr_client: alice_client,
             },
             User {
                 name: "Bob".to_string(),
                 keys: bob_keys,
-                mdk: bob_mdk,
+                mdk: bob_mdk.clone(),
                 wallet: bob_wallet,
-                mls_group_id: Some(bob_group_id),
+                mls_group_id: Some(bob_group_id.clone()),
                 nostr_client: bob_client,
             },
             User {
                 name: "Carol".to_string(),
                 keys: carol_keys,
-                mdk: carol_mdk,
+                mdk: carol_mdk.clone(),
                 wallet: carol_wallet,
-                mls_group_id: Some(carol_group_id),
+                mls_group_id: Some(carol_group_id.clone()),
                 nostr_client: carol_client,
             },
         ];
+
+        // Load historical messages from MDK storage (already decrypted)
+        let mut historical_messages = Vec::new();
+        if let Ok(mut msgs) = alice_mdk.lock().unwrap().get_messages(&alice_group_id) {
+            // Sort messages by created_at timestamp (oldest first)
+            msgs.sort_by_key(|m| m.created_at);
+
+            tracing::info!("Loading {} historical messages from MDK storage:", msgs.len());
+            for (i, msg) in msgs.iter().enumerate() {
+                let sender_name = format!("User-{}", &msg.pubkey.to_string()[..8]);
+                tracing::info!("  [{}] {} at {}: {}", i, sender_name, msg.created_at, msg.content);
+                historical_messages.push(Message {
+                    sender: sender_name,
+                    content: msg.content.clone(),
+                });
+            }
+            tracing::info!("Loaded {} historical messages in chronological order", historical_messages.len());
+        }
 
         // Fetch initial balances from wallets
         let mut initial_balances = vec![0u64; 3];
@@ -236,7 +306,7 @@ impl AppState {
 
         let state = Self {
             users,
-            messages: Arc::new(Mutex::new(Vec::new())),
+            messages: Arc::new(Mutex::new(historical_messages)),
             relay_urls,
             relay_mode,
             pending_qr: Arc::new(Mutex::new(None)),
@@ -258,7 +328,7 @@ impl AppState {
     }
 
     async fn start_relay_listeners(&self) -> Result<()> {
-        for (user_index, user) in self.users.iter().enumerate() {
+        for (_user_index, user) in self.users.iter().enumerate() {
             let client = user.nostr_client.clone();
             let messages = self.messages.clone();
             let user_name = user.name.clone();
@@ -266,15 +336,18 @@ impl AppState {
             let group_id = user.mls_group_id.clone().unwrap();
 
             // Convert group ID to hex string for filtering
-            let group_id_hex = hex::encode(group_id.as_slice());
+            let _group_id_hex = hex::encode(group_id.as_slice());
 
             tokio::spawn(async move {
                 tracing::info!("{} starting relay listener for group: {}", user_name, hex::encode(group_id.as_slice()));
 
-                // Subscribe to ALL events (for debugging)
-                let filter = Filter::new();
+                // Subscribe to recent events (10 seconds ago to now)
+                // This ensures we catch any events that happen right after we connect
+                let now = nostr::Timestamp::now();
+                let recent = nostr::Timestamp::from(now.as_u64().saturating_sub(10));
+                let filter = Filter::new().since(recent);
 
-                tracing::info!("{} subscribing with filter: ALL EVENTS (no filters)", user_name);
+                tracing::info!("{} subscribing to events since {} (10 sec buffer)", user_name, recent);
 
                 match client.subscribe(filter.clone(), None).await {
                     Ok(sub_id) => {
@@ -298,35 +371,50 @@ impl AppState {
                             tracing::info!("{} received event #{} from {} (kind: {})", user_name, event_count, relay_url, event.kind);
 
                             // Try to process the message through MDK
-                            match mdk.lock().unwrap().process_message(event) {
-                            Ok(_) => {
-                                tracing::info!("{} MDK processed event successfully", user_name);
-                                // Get the decrypted messages
-                                match mdk.lock().unwrap().get_messages(&group_id) {
-                                    Ok(msgs) => {
-                                        tracing::info!("{} has {} total messages", user_name, msgs.len());
-                                        if let Some(last_msg) = msgs.last() {
-                                            // Use pubkey prefix as sender identifier
-                                            let sender_name = format!("User-{}", &last_msg.pubkey.to_string()[..8]);
+                            let process_result = {
+                                let mut mdk_guard = mdk.lock().unwrap();
+                                mdk_guard.process_message(event)
+                            };
 
+                            match process_result {
+                                Ok(result) => {
+                                    tracing::info!("{} MDK processed event successfully (event_id: {})", user_name, event.id);
+
+                                    // Check if this is an application message (chat message)
+                                    if let mdk_core::prelude::MessageProcessingResult::ApplicationMessage(msg) = result {
+                                        let sender_name = format!("User-{}", &msg.pubkey.to_string()[..8]);
+                                        let content = msg.content.clone();
+
+                                        tracing::info!("{} received APPLICATION MESSAGE: '{}' from {} at {}",
+                                            user_name, content, sender_name, msg.created_at);
+
+                                        // Check if this message is already in the shared list
+                                        let already_exists = {
+                                            let messages_guard = messages.lock().unwrap();
+                                            let exists = messages_guard.iter().any(|m| {
+                                                m.sender == sender_name && m.content == content
+                                            });
+                                            tracing::info!("{} checking if message exists in GUI: {}", user_name, exists);
+                                            exists
+                                        };
+
+                                        if !already_exists {
                                             messages.lock().unwrap().push(Message {
                                                 sender: sender_name.clone(),
-                                                content: last_msg.content.clone(),
+                                                content: content.clone(),
                                             });
-                                            tracing::info!("{} added message to GUI: {} says '{}'", user_name, sender_name, last_msg.content);
+                                            tracing::info!("{} added NEW message to GUI: {} says '{}'", user_name, sender_name, content);
                                         } else {
-                                            tracing::warn!("{} no messages found after processing", user_name);
+                                            tracing::info!("{} message already exists in GUI, skipping", user_name);
                                         }
-                                    }
-                                    Err(e) => {
-                                        tracing::error!("{} failed to get messages: {}", user_name, e);
+                                    } else {
+                                        tracing::debug!("{} processed non-application message: {:?}", user_name, result);
                                     }
                                 }
+                                Err(e) => {
+                                    tracing::debug!("{} couldn't process event ({}): {}", user_name, event.id, e);
+                                }
                             }
-                            Err(e) => {
-                                tracing::warn!("{} couldn't process event: {}", user_name, e);
-                            }
-                        }
                         }
                         other => {
                             tracing::debug!("{} received other notification: {:?}", user_name, other);

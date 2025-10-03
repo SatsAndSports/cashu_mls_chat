@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies]
 # MDK - from local path
 mdk-core = { path = "./mdk/crates/mdk-core" }
-mdk-memory-storage = { path = "./mdk/crates/mdk-memory-storage" }
+mdk-sqlite-storage = { path = "./mdk/crates/mdk-sqlite-storage" }
 nostr = "0.43"
 nostr-sdk = "0.43"
 
