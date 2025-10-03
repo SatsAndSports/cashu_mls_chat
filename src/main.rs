@@ -43,7 +43,6 @@ struct AppState {
     users: Vec<User>,
     messages: Arc<Mutex<Vec<Message>>>,
     relay_urls: Vec<RelayUrl>,
-    relay_mode: bool, // Set at startup, immutable
     pending_qr: Arc<Mutex<Option<(String, String, u64)>>>, // (user_name, invoice, amount)
     balances: Arc<Mutex<Vec<u64>>>, // Cached balances for each user
 }
@@ -76,17 +75,13 @@ fn load_or_create_keys(name: &str) -> Result<Keys> {
 }
 
 impl AppState {
-    async fn new(relay_mode: bool) -> Result<Self> {
+    async fn new() -> Result<Self> {
         // Use local relay
         let relay_urls = vec![
             RelayUrl::parse("ws://localhost:8080")?,
         ];
 
-        if relay_mode {
-            tracing::info!("Starting in RELAY MODE - using real Nostr relays");
-        } else {
-            tracing::info!("Starting in LOCAL MODE - simulating relay broadcast");
-        }
+        tracing::info!("Connecting to relay: ws://localhost:8080");
 
         // Test mint URL (testnut - no real sats)
         let mint_url = MintUrl::from_str("https://nofees.testnut.cashu.space")?;
@@ -308,21 +303,18 @@ impl AppState {
             users,
             messages: Arc::new(Mutex::new(historical_messages)),
             relay_urls,
-            relay_mode,
             pending_qr: Arc::new(Mutex::new(None)),
             balances: Arc::new(Mutex::new(initial_balances)),
         };
 
-        // If relay mode, connect to relays and start listening
-        if relay_mode {
-            for user in &state.users {
-                user.nostr_client.connect().await;
-            }
-            tracing::info!("Connected to Nostr relays");
-
-            // Start background tasks to listen for messages
-            state.start_relay_listeners().await?;
+        // Connect to relays and start listening
+        for user in &state.users {
+            user.nostr_client.connect().await;
         }
+        tracing::info!("Connected to Nostr relays");
+
+        // Start background tasks to listen for messages
+        state.start_relay_listeners().await?;
 
         Ok(state)
     }
@@ -345,9 +337,11 @@ impl AppState {
                 // This ensures we catch any events that happen right after we connect
                 let now = nostr::Timestamp::now();
                 let recent = nostr::Timestamp::from(now.as_u64().saturating_sub(10));
-                let filter = Filter::new().since(recent);
+                let filter = Filter::new()
+                    .kind(nostr::Kind::MlsGroupMessage)
+                    .since(recent);
 
-                tracing::info!("{} subscribing to events since {} (10 sec buffer)", user_name, recent);
+                tracing::info!("{} subscribing to MLS messages (kind 445) since {} (10 sec buffer)", user_name, recent);
 
                 match client.subscribe(filter.clone(), None).await {
                     Ok(sub_id) => {
@@ -441,50 +435,33 @@ impl AppState {
             .unwrap()
             .create_message(group_id, rumor)?;
 
-        if self.relay_mode {
-            // Log event details before publishing
-            tracing::info!("{} sending message event:", user.name);
-            tracing::info!("  Event ID: {}", message_event.id);
-            tracing::info!("  Kind: {}", message_event.kind);
-            tracing::info!("  ALL Tags: {:?}", message_event.tags);
+        // Log event details before publishing
+        tracing::info!("{} sending message event:", user.name);
+        tracing::info!("  Event ID: {}", message_event.id);
+        tracing::info!("  Kind: {}", message_event.kind);
+        tracing::info!("  ALL Tags: {:?}", message_event.tags);
 
-            // Check for h tag specifically
-            let h_tag = message_event.tags.iter().find(|t| {
-                t.as_slice().first().map(|s| s.as_str()) == Some("h")
-            });
-            tracing::info!("  h tag found: {:?}", h_tag);
+        // Check for h tag specifically
+        let h_tag = message_event.tags.iter().find(|t| {
+            t.as_slice().first().map(|s| s.as_str()) == Some("h")
+        });
+        tracing::info!("  h tag found: {:?}", h_tag);
 
-            // Publish to real Nostr relays
-            let send_result = user.nostr_client.send_event(&message_event).await?;
-            tracing::info!("{} published message to Nostr relays", user.name);
+        // Publish to real Nostr relays
+        let send_result = user.nostr_client.send_event(&message_event).await?;
+        tracing::info!("{} published message to Nostr relays", user.name);
 
-            // Log which relays accepted the event
-            for relay_url in send_result.success.iter() {
-                tracing::info!("  ✓ {} accepted the message", relay_url);
-            }
-            for relay_url in send_result.failed.keys() {
-                if let Some(error) = send_result.failed.get(relay_url) {
-                    tracing::warn!("  ✗ {} rejected the message: {}", relay_url, error);
-                }
-            }
-
-            // Don't add to message list - will come back via subscription
-        } else {
-            // Simulate local broadcast (no network)
-            for other_user in &self.users {
-                other_user
-                    .mdk
-                    .lock()
-                    .unwrap()
-                    .process_message(&message_event)?;
-            }
-
-            // Add the actual message content
-            self.messages.lock().unwrap().push(Message {
-                sender: user.name.clone(),
-                content,
-            });
+        // Log which relays accepted the event
+        for relay_url in send_result.success.iter() {
+            tracing::info!("  ✓ {} accepted the message", relay_url);
         }
+        for relay_url in send_result.failed.keys() {
+            if let Some(error) = send_result.failed.get(relay_url) {
+                tracing::warn!("  ✗ {} rejected the message: {}", relay_url, error);
+            }
+        }
+
+        // Don't add to message list - will come back via subscription
 
         Ok(())
     }
@@ -876,17 +853,8 @@ impl eframe::App for ChatApp {
 
                 ui.separator();
 
-                // Show relay mode (read-only, set at startup)
-                ui.label(if self.state.relay_mode {
-                    "Mode: Real Nostr Relays ✓"
-                } else {
-                    "Mode: Local Simulation"
-                });
-                if self.state.relay_mode {
-                    ui.label("(Local relay: ws://localhost:8080)");
-                } else {
-                    ui.label("(restart with --relay flag for relay mode)");
-                }
+                // Show relay connection
+                ui.label("Connected to relay: ws://localhost:8080");
             });
         });
 
@@ -972,13 +940,9 @@ async fn main() -> Result<()> {
         .finish();
     tracing::subscriber::set_global_default(subscriber)?;
 
-    // Check for --relay flag
-    let args: Vec<String> = std::env::args().collect();
-    let relay_mode = args.contains(&"--relay".to_string());
-
     // Initialize app state
     println!("Initializing group chat...");
-    let state = AppState::new(relay_mode).await?;
+    let state = AppState::new().await?;
     println!("Group chat initialized!");
 
     // Create single window with three panes
