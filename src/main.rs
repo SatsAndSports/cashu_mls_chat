@@ -1,5 +1,6 @@
 use anyhow::Result;
 use eframe::egui;
+use qrcode::QrCode;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use tracing::Level;
@@ -13,7 +14,8 @@ use nostr::{EventId, Keys, Kind, RelayUrl};
 use nostr_sdk::{Client, Filter, RelayPoolNotification};
 
 // CDK imports
-use cdk::wallet::{Wallet, WalletBuilder};
+use cdk::Amount;
+use cdk::wallet::{Wallet, WalletBuilder, ReceiveOptions, SendOptions};
 use cdk::nuts::CurrencyUnit;
 use cdk::mint_url::MintUrl;
 use cdk_sqlite::WalletSqliteDatabase;
@@ -40,6 +42,8 @@ struct AppState {
     messages: Arc<Mutex<Vec<Message>>>,
     relay_urls: Vec<RelayUrl>,
     relay_mode: bool, // Set at startup, immutable
+    pending_qr: Arc<Mutex<Option<(String, String, u64)>>>, // (user_name, invoice, amount)
+    balances: Arc<Mutex<Vec<u64>>>, // Cached balances for each user
 }
 
 impl AppState {
@@ -61,8 +65,8 @@ impl AppState {
             tracing::info!("Starting in LOCAL MODE - simulating relay broadcast");
         }
 
-        // Minibits mint URL
-        let mint_url = MintUrl::from_str("https://mint.minibits.cash/Bitcoin")?;
+        // Test mint URL (testnut - no real sats)
+        let mint_url = MintUrl::from_str("https://nofees.testnut.cashu.space")?;
         tracing::info!("Using mint: {}", mint_url);
 
         // Create three users
@@ -222,11 +226,27 @@ impl AppState {
             },
         ];
 
+        // Fetch initial balances from wallets
+        let mut initial_balances = vec![0u64; 3];
+        for (i, user) in users.iter().enumerate() {
+            match user.wallet.total_balance().await {
+                Ok(balance) => {
+                    initial_balances[i] = balance.into();
+                    tracing::info!("{} initial balance: {} sats", user.name, balance);
+                }
+                Err(e) => {
+                    tracing::warn!("{} failed to fetch initial balance: {}", user.name, e);
+                }
+            }
+        }
+
         let state = Self {
             users,
             messages: Arc::new(Mutex::new(Vec::new())),
             relay_urls,
             relay_mode,
+            pending_qr: Arc::new(Mutex::new(None)),
+            balances: Arc::new(Mutex::new(initial_balances)),
         };
 
         // If relay mode, connect to relays and start listening
@@ -395,17 +415,17 @@ impl ChatApp {
     }
 
     fn render_user_pane(&mut self, ui: &mut egui::Ui, user_index: usize) {
-        let user = &self.state.users[user_index];
+        let user_name = self.state.users[user_index].name.clone();
 
         ui.vertical(|ui| {
-            ui.heading(&user.name);
+            ui.heading(&user_name);
             ui.separator();
 
-            // Wallet balance (async query, so showing cached value of 0 for now)
-            // TODO: Add background task to periodically fetch balance
+            // Wallet balance (cached)
             ui.horizontal(|ui| {
                 ui.label("Balance:");
-                ui.label("0 sats (wallet ready)");
+                let balance = self.state.balances.lock().unwrap()[user_index];
+                ui.label(format!("{} sats", balance));
             });
             ui.separator();
 
@@ -433,16 +453,279 @@ impl ChatApp {
                 let content = self.input_texts[user_index].clone();
                 self.input_texts[user_index].clear();
 
-                let state = self.state.clone();
-
-                // Send message in background
-                tokio::spawn(async move {
-                    if let Err(e) = state.send_message(user_index, content).await {
-                        eprintln!("Error sending message: {}", e);
-                    }
-                });
+                // Check for commands
+                if content.starts_with("!") {
+                    self.handle_command(user_index, &content);
+                } else {
+                    // Send regular message in background
+                    let state = self.state.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = state.send_message(user_index, content).await {
+                            eprintln!("Error sending message: {}", e);
+                        }
+                    });
+                }
             }
         });
+    }
+
+    fn handle_command(&mut self, user_index: usize, command: &str) {
+        let parts: Vec<&str> = command.split_whitespace().collect();
+        if parts.is_empty() {
+            return;
+        }
+
+        let wallet = self.state.users[user_index].wallet.clone();
+        let user_name = self.state.users[user_index].name.clone();
+
+        match parts[0] {
+            "!topup" => {
+                // Parse amount (default to 100 sats)
+                let amount = if parts.len() > 1 {
+                    parts[1].parse::<u64>().unwrap_or(100)
+                } else {
+                    100
+                };
+
+                // Create mint quote in background
+                let user_name_clone = user_name.clone();
+                let pending_qr = self.state.pending_qr.clone();
+
+                tokio::spawn(async move {
+                    match wallet.mint_quote(Amount::from(amount), None).await {
+                        Ok(quote) => {
+                            tracing::info!("{} created mint quote: request={}, id={}",
+                                user_name_clone, quote.request, quote.id);
+                            println!("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                            println!("Lightning Invoice for {} ({} sats):", user_name_clone, amount);
+                            println!("{}", quote.request);
+                            println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+
+                            // Set the QR popup data
+                            *pending_qr.lock().unwrap() = Some((user_name_clone.clone(), quote.request, amount));
+                        }
+                        Err(e) => {
+                            tracing::error!("{} failed to create mint quote: {}", user_name_clone, e);
+                        }
+                    }
+                });
+
+                tracing::info!("{} requested topup of {} sats", user_name, amount);
+            }
+            "!redeem" => {
+                if parts.len() < 2 {
+                    tracing::warn!("{} !redeem requires a token", user_name);
+                    self.state.messages.lock().unwrap().push(Message {
+                        sender: "SYSTEM".to_string(),
+                        content: format!("{}: !redeem requires a token", user_name),
+                    });
+                    return;
+                }
+
+                let token = parts[1..].join(" ");
+                let user_name_clone = user_name.clone();
+                let wallet_clone = wallet.clone();
+                let messages = self.state.messages.clone();
+                let balances = self.state.balances.clone();
+
+                // Add initial feedback
+                messages.lock().unwrap().push(Message {
+                    sender: "SYSTEM".to_string(),
+                    content: format!("{}: Redeeming token...", user_name),
+                });
+
+                tokio::spawn(async move {
+                    match wallet_clone.receive(&token, ReceiveOptions::default()).await {
+                        Ok(amount) => {
+                            tracing::info!("{} successfully redeemed {} sats!", user_name_clone, amount);
+                            println!("\n✅ {} received {} sats\n", user_name_clone, amount);
+
+                            // Fetch updated balance
+                            match wallet_clone.total_balance().await {
+                                Ok(new_balance) => {
+                                    balances.lock().unwrap()[user_index] = new_balance.into();
+                                    messages.lock().unwrap().push(Message {
+                                        sender: "SYSTEM".to_string(),
+                                        content: format!("{}: ✅ Received {} sats! New balance: {} sats",
+                                            user_name_clone, amount, new_balance),
+                                    });
+                                }
+                                Err(e) => {
+                                    tracing::error!("{} failed to fetch balance: {}", user_name_clone, e);
+                                    messages.lock().unwrap().push(Message {
+                                        sender: "SYSTEM".to_string(),
+                                        content: format!("{}: ✅ Received {} sats (balance fetch failed)",
+                                            user_name_clone, amount),
+                                    });
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            tracing::error!("{} failed to redeem token: {}", user_name_clone, e);
+                            messages.lock().unwrap().push(Message {
+                                sender: "SYSTEM".to_string(),
+                                content: format!("{}: ❌ Failed to redeem: {}", user_name_clone, e),
+                            });
+                        }
+                    }
+                });
+
+                tracing::info!("{} attempting to redeem token", user_name);
+            }
+            "!redeemlast" => {
+                // Find the most recent message with a cashu token
+                let messages_lock = self.state.messages.lock().unwrap();
+                let token_opt = messages_lock.iter().rev().find_map(|msg| {
+                    // Look for cashuA or cashuB tokens in the message
+                    msg.content.split_whitespace()
+                        .find(|word| word.starts_with("cashuA") || word.starts_with("cashuB"))
+                        .map(|s| s.to_string())
+                });
+                drop(messages_lock);
+
+                if let Some(token) = token_opt {
+                    let user_name_clone = user_name.clone();
+                    let wallet_clone = wallet.clone();
+                    let messages = self.state.messages.clone();
+                    let balances = self.state.balances.clone();
+
+                    // Add initial feedback
+                    messages.lock().unwrap().push(Message {
+                        sender: "SYSTEM".to_string(),
+                        content: format!("{}: Redeeming last token...", user_name),
+                    });
+
+                    tokio::spawn(async move {
+                        match wallet_clone.receive(&token, ReceiveOptions::default()).await {
+                            Ok(amount) => {
+                                tracing::info!("{} successfully redeemed {} sats!", user_name_clone, amount);
+                                println!("\n✅ {} received {} sats\n", user_name_clone, amount);
+
+                                // Fetch updated balance
+                                match wallet_clone.total_balance().await {
+                                    Ok(new_balance) => {
+                                        balances.lock().unwrap()[user_index] = new_balance.into();
+                                        messages.lock().unwrap().push(Message {
+                                            sender: "SYSTEM".to_string(),
+                                            content: format!("{}: ✅ Received {} sats! New balance: {} sats",
+                                                user_name_clone, amount, new_balance),
+                                        });
+                                    }
+                                    Err(e) => {
+                                        tracing::error!("{} failed to fetch balance: {}", user_name_clone, e);
+                                        messages.lock().unwrap().push(Message {
+                                            sender: "SYSTEM".to_string(),
+                                            content: format!("{}: ✅ Received {} sats (balance fetch failed)",
+                                                user_name_clone, amount),
+                                        });
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                tracing::error!("{} failed to redeem token: {}", user_name_clone, e);
+                                messages.lock().unwrap().push(Message {
+                                    sender: "SYSTEM".to_string(),
+                                    content: format!("{}: ❌ Failed to redeem: {}", user_name_clone, e),
+                                });
+                            }
+                        }
+                    });
+
+                    tracing::info!("{} attempting to redeem last token", user_name);
+                } else {
+                    self.state.messages.lock().unwrap().push(Message {
+                        sender: "SYSTEM".to_string(),
+                        content: format!("{}: No cashu token found in recent messages", user_name),
+                    });
+                    tracing::warn!("{} no cashu token found in messages", user_name);
+                }
+            }
+            "!send" => {
+                // Parse amount (default to 10 sats)
+                let amount = if parts.len() > 1 {
+                    parts[1].parse::<u64>().unwrap_or(10)
+                } else {
+                    10
+                };
+
+                let user_name_clone = user_name.clone();
+                let wallet_clone = wallet.clone();
+                let messages = self.state.messages.clone();
+                let balances = self.state.balances.clone();
+                let state = self.state.clone();
+
+                // Add initial feedback
+                messages.lock().unwrap().push(Message {
+                    sender: "SYSTEM".to_string(),
+                    content: format!("{}: Creating {}-sat token...", user_name, amount),
+                });
+
+                tokio::spawn(async move {
+                    // Prepare send
+                    match wallet_clone.prepare_send(Amount::from(amount), SendOptions::default()).await {
+                        Ok(prepared) => {
+                            // Confirm send to get token
+                            match prepared.confirm(None).await {
+                                Ok(token) => {
+                                    tracing::info!("{} created token for {} sats", user_name_clone, amount);
+
+                                    // Fetch updated balance
+                                    match wallet_clone.total_balance().await {
+                                        Ok(new_balance) => {
+                                            balances.lock().unwrap()[user_index] = new_balance.into();
+                                        }
+                                        Err(e) => {
+                                            tracing::error!("{} failed to fetch balance: {}", user_name_clone, e);
+                                        }
+                                    }
+
+                                    // Send token as MLS message to group
+                                    let send_result = state.send_message(
+                                        user_index,
+                                        format!("🎁 Cashu token ({} sats): {}", amount, token)
+                                    ).await;
+
+                                    match send_result {
+                                        Ok(_) => {
+                                            messages.lock().unwrap().push(Message {
+                                                sender: "SYSTEM".to_string(),
+                                                content: format!("{}: ✅ Sent {}-sat token to group!", user_name_clone, amount),
+                                            });
+                                        }
+                                        Err(e) => {
+                                            tracing::error!("{} failed to send message: {}", user_name_clone, e);
+                                            messages.lock().unwrap().push(Message {
+                                                sender: "SYSTEM".to_string(),
+                                                content: format!("{}: ❌ Failed to broadcast token: {}", user_name_clone, e),
+                                            });
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::error!("{} failed to confirm send: {}", user_name_clone, e);
+                                    messages.lock().unwrap().push(Message {
+                                        sender: "SYSTEM".to_string(),
+                                        content: format!("{}: ❌ Failed to confirm send: {}", user_name_clone, e),
+                                    });
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            tracing::error!("{} failed to prepare send: {}", user_name_clone, e);
+                            messages.lock().unwrap().push(Message {
+                                sender: "SYSTEM".to_string(),
+                                content: format!("{}: ❌ Failed to create token: {}", user_name_clone, e),
+                            });
+                        }
+                    }
+                });
+
+                tracing::info!("{} creating token for {} sats", user_name, amount);
+            }
+            _ => {
+                tracing::warn!("{} unknown command: {}", user_name, parts[0]);
+            }
+        }
     }
 }
 
@@ -488,6 +771,67 @@ impl eframe::App for ChatApp {
                 self.render_user_pane(&mut columns[2], 2); // Carol
             });
         });
+
+        // Show QR code popup if available
+        let mut close_popup = false;
+        if let Some((user_name, invoice, amount)) = self.state.pending_qr.lock().unwrap().clone() {
+            egui::Window::new(format!("⚡ Lightning Invoice - {} ({} sats)", user_name, amount))
+                .collapsible(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ctx, |ui| {
+                    ui.vertical_centered(|ui| {
+                        // Generate QR code
+                        if let Ok(code) = QrCode::new(&invoice) {
+                            let qr_size = 400;
+                            let module_size = qr_size / code.width();
+
+                            // Create image data
+                            let qr_image = code.render::<image::Luma<u8>>()
+                                .quiet_zone(false)
+                                .min_dimensions(qr_size as u32, qr_size as u32)
+                                .build();
+
+                            // Convert to egui texture
+                            let pixels: Vec<_> = qr_image.pixels()
+                                .flat_map(|p| [p.0[0], p.0[0], p.0[0]])
+                                .collect();
+
+                            let color_image = egui::ColorImage::from_rgb(
+                                [qr_image.width() as usize, qr_image.height() as usize],
+                                &pixels,
+                            );
+
+                            let texture = ctx.load_texture(
+                                "qr_code",
+                                color_image,
+                                egui::TextureOptions::LINEAR,
+                            );
+
+                            ui.image(&texture);
+                        } else {
+                            ui.label("Failed to generate QR code");
+                        }
+
+                        ui.add_space(10.0);
+                        ui.label("Scan with Lightning wallet to pay");
+                        ui.add_space(10.0);
+
+                        // Invoice text (collapsible)
+                        ui.collapsing("Show invoice text", |ui| {
+                            ui.text_edit_multiline(&mut invoice.as_str());
+                        });
+
+                        ui.add_space(10.0);
+                        if ui.button("Close").clicked() {
+                            close_popup = true;
+                        }
+                    });
+                });
+        }
+
+        if close_popup {
+            *self.state.pending_qr.lock().unwrap() = None;
+        }
 
         // Request repaint to update messages
         ctx.request_repaint();

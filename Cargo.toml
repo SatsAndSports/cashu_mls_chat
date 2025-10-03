@@ -18,6 +18,8 @@ cashu = { path = "./cdk/crates/cashu" }
 # GUI
 eframe = "0.29"
 egui = "0.29"
+qrcode = "0.14"
+image = "0.25"
 
 # Common dependencies
 tokio = { version = "1", features = ["full"] }
