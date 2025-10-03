@@ -573,7 +573,17 @@ impl ChatApp {
                     let messages = self.state.messages.lock().unwrap();
                     for msg in messages.iter() {
                         let formatted_content = Self::format_message_content(&msg.content);
-                        ui.label(format!("{}: {}", msg.sender, formatted_content));
+
+                        // Check if message contains a Cashu token
+                        if formatted_content.contains("🎁 Cashu Token") {
+                            ui.label(format!("{}: ", msg.sender));
+                            ui.label(
+                                egui::RichText::new(&formatted_content)
+                                    .color(egui::Color32::from_rgb(255, 140, 0))
+                            );
+                        } else {
+                            ui.label(format!("{}: {}", msg.sender, formatted_content));
+                        }
                     }
                 });
 
