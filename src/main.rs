@@ -426,8 +426,12 @@ impl AppState {
         let user = &self.users[user_index];
         let group_id = user.mls_group_id.as_ref().unwrap();
 
+        // Prepend timestamp (Unix epoch seconds) and username to message content
+        let now = nostr::Timestamp::now();
+        let content_with_metadata = format!("{}\t{}\t{}", now.as_u64(), user.name, content);
+
         // Create message
-        let rumor = EventBuilder::new(Kind::Custom(9), &content).build(user.keys.public_key());
+        let rumor = EventBuilder::new(Kind::Custom(9), &content_with_metadata).build(user.keys.public_key());
 
         let message_event = user
             .mdk
