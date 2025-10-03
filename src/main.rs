@@ -434,6 +434,8 @@ impl ChatApp {
             egui::ScrollArea::vertical()
                 .id_salt(format!("messages_{}", user_index))
                 .max_height(300.0)
+                .auto_shrink([false; 2])
+                .stick_to_bottom(true)
                 .show(ui, |ui| {
                     let messages = self.state.messages.lock().unwrap();
                     for msg in messages.iter() {
