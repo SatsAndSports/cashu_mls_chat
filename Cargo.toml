@@ -1,0 +1,17 @@
+[package]
+name = "mdk_ecash_demo"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# MDK - from local path
+mdk-core = { path = "./mdk/crates/mdk-core" }
+mdk-memory-storage = { path = "./mdk/crates/mdk-memory-storage" }
+
+# CDK - from local path
+cdk = { path = "./cdk/crates/cdk" }
+cashu = { path = "./cdk/crates/cashu" }
+
+# Common dependencies
+tokio = { version = "1", features = ["full"] }
+anyhow = "1"
