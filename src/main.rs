@@ -187,6 +187,7 @@ impl AppState {
 struct ChatApp {
     state: AppState,
     input_texts: [String; 3],
+    zoom_level: f32,
 }
 
 impl ChatApp {
@@ -194,6 +195,7 @@ impl ChatApp {
         Self {
             state,
             input_texts: [String::new(), String::new(), String::new()],
+            zoom_level: 2.0,
         }
     }
 
@@ -227,8 +229,11 @@ impl ChatApp {
 
             // Input area
             ui.label("Send message:");
-            ui.text_edit_singleline(&mut self.input_texts[user_index]);
-            if ui.button("Send").clicked() && !self.input_texts[user_index].is_empty() {
+            let response = ui.text_edit_singleline(&mut self.input_texts[user_index]);
+            let should_send = (ui.button("Send").clicked() || response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
+                && !self.input_texts[user_index].is_empty();
+
+            if should_send {
                 let content = self.input_texts[user_index].clone();
                 self.input_texts[user_index].clear();
 
@@ -247,6 +252,25 @@ impl ChatApp {
 
 impl eframe::App for ChatApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Apply zoom
+        ctx.set_pixels_per_point(self.zoom_level);
+
+        egui::TopBottomPanel::top("zoom_panel").show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Zoom:");
+                if ui.button("➖").clicked() && self.zoom_level > 0.5 {
+                    self.zoom_level -= 0.1;
+                }
+                ui.label(format!("{:.0}%", self.zoom_level * 100.0));
+                if ui.button("➕").clicked() && self.zoom_level < 3.0 {
+                    self.zoom_level += 0.1;
+                }
+                if ui.button("Reset").clicked() {
+                    self.zoom_level = 1.0;
+                }
+            });
+        });
+
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.columns(3, |columns| {
                 self.render_user_pane(&mut columns[0], 0); // Alice
