@@ -382,7 +382,7 @@ impl AppState {
 
                             // Try to process the message through MDK
                             let process_result = {
-                                let mdk_guard = mdk.lock().unwrap();
+                                let mut mdk_guard = mdk.lock().unwrap();
                                 mdk_guard.process_message(event)
                             };
 
