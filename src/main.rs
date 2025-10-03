@@ -77,12 +77,45 @@ fn load_or_create_keys(name: &str) -> Result<Keys> {
 
 impl AppState {
     async fn new() -> Result<Self> {
-        // Use local relay
+        // Use local relay + public relays
         let relay_urls = vec![
-            RelayUrl::parse("ws://localhost:8080")?,
+            //RelayUrl::parse("ws://localhost:8080")?,
+            //RelayUrl::parse("wss://relay.damus.io")?,
+            //RelayUrl::parse("wss://nos.lol")?, // 28 bits needed
+            RelayUrl::parse("wss://relay.nostr.band")?,
+            RelayUrl::parse("wss://nostr.bitcoiner.social")?,
+            RelayUrl::parse("wss://nostr.land")?,
+            RelayUrl::parse("wss://relay.primal.net")?, // WORKED
+            RelayUrl::parse("wss://nostr.wine")?,
+            //RelayUrl::parse("wss://nostr.mom")?,// pow28
+            RelayUrl::parse("wss://nostr.strits.dk")?,
+            //RelayUrl::parse("wss://relay.mostr.pub")?,
+            RelayUrl::parse("wss://nostr.oxtr.dev")?,
+            //RelayUrl::parse("wss://aggr.nostr.land")?,
+            RelayUrl::parse("wss://nostr-pub.wellorder.net")?,
+            //RelayUrl::parse("wss://relay.nostrplebs.com")?,
+            RelayUrl::parse("wss://orangesync.tech")?, // WORKED
+            RelayUrl::parse("wss://relay.snort.social")?,
+            RelayUrl::parse("wss://vitor.nostr1.com")?,
+            RelayUrl::parse("wss://nostr.chaima.info")?, // WORKED
+                                                         //
+            RelayUrl::parse("wss://premium.primal.net")?,
+            RelayUrl::parse("wss://theforest.nostr1.com")?,
+            RelayUrl::parse("wss://articles.layer3.news")?,
+            RelayUrl::parse("wss://nostr-01.yakihonne.com")?,
+            RelayUrl::parse("wss://wot.nostr.party")?,
+            RelayUrl::parse("wss://no.str.cr")?,
+            RelayUrl::parse("wss://offchain.pub")?,
+            RelayUrl::parse("wss://primus.nostr1.com")?,
+            RelayUrl::parse("wss://bitcoiner.social")?,
+            RelayUrl::parse("wss://relay.jeffg.fyi")?,
+
+            //RelayUrl::parse("wss://relay.0xchat.com")?,//forbidden
+            RelayUrl::parse("wss://relay.benthecarman.com")?,
+            //RelayUrl::parse("wss://yabu.me")?,
         ];
 
-        tracing::info!("Connecting to relay: ws://localhost:8080");
+        tracing::info!("Connecting to relays.");
 
         // Test mint URL (testnut - no real sats)
         let mint_url = MintUrl::from_str("https://nofees.testnut.cashu.space")?;
@@ -919,7 +952,7 @@ impl eframe::App for ChatApp {
                 ui.separator();
 
                 // Show relay connection
-                ui.label("Connected to relay: ws://localhost:8080");
+                ui.label("Connected to: localhost + 3 public relays");
             });
         });
 
