@@ -459,8 +459,10 @@ impl AppState {
         let now = nostr::Timestamp::now();
         let content_with_metadata = format!("{}\t{}\t{}", now.as_u64(), user.name, content);
 
-        // Create message
-        let rumor = EventBuilder::new(Kind::Custom(9), &content_with_metadata).build(user.keys.public_key());
+        // Create message with NIP-13 Proof of Work (difficulty: 21)
+        let rumor = EventBuilder::new(Kind::Custom(9), &content_with_metadata)
+            .pow(22)
+            .build(user.keys.public_key());
 
         let message_event = user
             .mdk
@@ -511,7 +513,7 @@ impl ChatApp {
         Self {
             state,
             input_texts: [String::new(), String::new(), String::new()],
-            zoom_level: 2.4,
+            zoom_level: 1.6,
         }
     }
 
