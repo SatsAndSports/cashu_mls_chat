@@ -1,5 +1,6 @@
 use anyhow::Result;
 use eframe::egui;
+use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use tracing::Level;
 use tracing_subscriber::FmtSubscriber;
@@ -12,14 +13,17 @@ use nostr::{EventId, Keys, Kind, RelayUrl};
 use nostr_sdk::{Client, Filter, RelayPoolNotification};
 
 // CDK imports
-use cdk::Amount;
+use cdk::wallet::{Wallet, WalletBuilder};
+use cdk::nuts::CurrencyUnit;
+use cdk::mint_url::MintUrl;
+use cdk_sqlite::WalletSqliteDatabase;
 
 #[derive(Clone)]
 struct User {
     name: String,
     keys: Keys,
     mdk: Arc<Mutex<MDK<MdkMemoryStorage>>>,
-    wallet_balance: Amount,
+    wallet: Wallet,
     mls_group_id: Option<GroupId>,
     nostr_client: Client,
 }
@@ -57,18 +61,55 @@ impl AppState {
             tracing::info!("Starting in LOCAL MODE - simulating relay broadcast");
         }
 
+        // Minibits mint URL
+        let mint_url = MintUrl::from_str("https://mint.minibits.cash/Bitcoin")?;
+        tracing::info!("Using mint: {}", mint_url);
+
         // Create three users
         let alice_keys = Keys::generate();
         let alice_mdk = Arc::new(Mutex::new(MDK::new(MdkMemoryStorage::default())));
         let alice_client = Client::new(alice_keys.clone());
 
+        // Create Alice's wallet with SQLite storage
+        let alice_db = WalletSqliteDatabase::new("./wallets/alice.db").await?;
+        let mut alice_seed = [0u8; 64];
+        alice_seed[..32].copy_from_slice(alice_keys.secret_key().as_secret_bytes());
+        let alice_wallet = WalletBuilder::new()
+            .mint_url(mint_url.clone())
+            .unit(CurrencyUnit::Sat)
+            .localstore(Arc::new(alice_db))
+            .seed(alice_seed)
+            .build()?;
+
         let bob_keys = Keys::generate();
         let bob_mdk = Arc::new(Mutex::new(MDK::new(MdkMemoryStorage::default())));
         let bob_client = Client::new(bob_keys.clone());
 
+        // Create Bob's wallet with SQLite storage
+        let bob_db = WalletSqliteDatabase::new("./wallets/bob.db").await?;
+        let mut bob_seed = [0u8; 64];
+        bob_seed[..32].copy_from_slice(bob_keys.secret_key().as_secret_bytes());
+        let bob_wallet = WalletBuilder::new()
+            .mint_url(mint_url.clone())
+            .unit(CurrencyUnit::Sat)
+            .localstore(Arc::new(bob_db))
+            .seed(bob_seed)
+            .build()?;
+
         let carol_keys = Keys::generate();
         let carol_mdk = Arc::new(Mutex::new(MDK::new(MdkMemoryStorage::default())));
         let carol_client = Client::new(carol_keys.clone());
+
+        // Create Carol's wallet with SQLite storage
+        let carol_db = WalletSqliteDatabase::new("./wallets/carol.db").await?;
+        let mut carol_seed = [0u8; 64];
+        carol_seed[..32].copy_from_slice(carol_keys.secret_key().as_secret_bytes());
+        let carol_wallet = WalletBuilder::new()
+            .mint_url(mint_url.clone())
+            .unit(CurrencyUnit::Sat)
+            .localstore(Arc::new(carol_db))
+            .seed(carol_seed)
+            .build()?;
 
         // Add relays to clients (for when real relays are enabled)
         for relay_url in &relay_urls {
@@ -159,7 +200,7 @@ impl AppState {
                 name: "Alice".to_string(),
                 keys: alice_keys,
                 mdk: alice_mdk,
-                wallet_balance: Amount::from(1000),
+                wallet: alice_wallet,
                 mls_group_id: Some(alice_group_id),
                 nostr_client: alice_client,
             },
@@ -167,7 +208,7 @@ impl AppState {
                 name: "Bob".to_string(),
                 keys: bob_keys,
                 mdk: bob_mdk,
-                wallet_balance: Amount::from(500),
+                wallet: bob_wallet,
                 mls_group_id: Some(bob_group_id),
                 nostr_client: bob_client,
             },
@@ -175,7 +216,7 @@ impl AppState {
                 name: "Carol".to_string(),
                 keys: carol_keys,
                 mdk: carol_mdk,
-                wallet_balance: Amount::from(750),
+                wallet: carol_wallet,
                 mls_group_id: Some(carol_group_id),
                 nostr_client: carol_client,
             },
@@ -327,7 +368,7 @@ impl AppState {
                     .process_message(&message_event)?;
             }
 
-            // Add to message list in local mode only
+            // Add the actual message content
             self.messages.lock().unwrap().push(Message {
                 sender: user.name.clone(),
                 content,
@@ -360,10 +401,11 @@ impl ChatApp {
             ui.heading(&user.name);
             ui.separator();
 
-            // Wallet balance
+            // Wallet balance (async query, so showing cached value of 0 for now)
+            // TODO: Add background task to periodically fetch balance
             ui.horizontal(|ui| {
                 ui.label("Balance:");
-                ui.label(format!("{} sats", user.wallet_balance));
+                ui.label("0 sats (wallet ready)");
             });
             ui.separator();
 

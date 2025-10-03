@@ -12,6 +12,7 @@ nostr-sdk = "0.43"
 
 # CDK - from local path
 cdk = { path = "./cdk/crates/cdk" }
+cdk-sqlite = { path = "./cdk/crates/cdk-sqlite" }
 cashu = { path = "./cdk/crates/cashu" }
 
 # GUI
