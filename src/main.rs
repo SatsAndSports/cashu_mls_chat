@@ -9,7 +9,7 @@ use mdk_core::prelude::*;
 use mdk_memory_storage::MdkMemoryStorage;
 use nostr::event::builder::EventBuilder;
 use nostr::{EventId, Keys, Kind, RelayUrl};
-use nostr_sdk::Client;
+use nostr_sdk::{Client, Filter, RelayPoolNotification};
 
 // CDK imports
 use cdk::Amount;
@@ -35,17 +35,27 @@ struct AppState {
     users: Vec<User>,
     messages: Arc<Mutex<Vec<Message>>>,
     relay_urls: Vec<RelayUrl>,
-    use_real_relays: Arc<Mutex<bool>>,
+    relay_mode: bool, // Set at startup, immutable
 }
 
 impl AppState {
-    async fn new() -> Result<Self> {
+    async fn new(relay_mode: bool) -> Result<Self> {
         // Use multiple real relays
         let relay_urls = vec![
             RelayUrl::parse("wss://relay.damus.io")?,
             RelayUrl::parse("wss://nos.lol")?,
             RelayUrl::parse("wss://relay.nostr.band")?,
+            RelayUrl::parse("wss://relay.primal.net")?,
+            RelayUrl::parse("wss://nostr.bitcoiner.social")?,
+            RelayUrl::parse("wss://nostr.mom")?,
+            RelayUrl::parse("wss://nostr.oxtr.dev")?,
         ];
+
+        if relay_mode {
+            tracing::info!("Starting in RELAY MODE - using real Nostr relays");
+        } else {
+            tracing::info!("Starting in LOCAL MODE - simulating relay broadcast");
+        }
 
         // Create three users
         let alice_keys = Keys::generate();
@@ -113,6 +123,10 @@ impl AppState {
 
         let alice_group_id = group_result.group.mls_group_id.clone();
 
+        // Log the group ID for debugging
+        let group_id_hex = hex::encode(alice_group_id.as_slice());
+        tracing::info!("MLS Group created with ID: {}", group_id_hex);
+
         // Bob processes welcome and joins
         let bob_welcome_rumor = &group_result.welcome_rumors[0];
         bob_mdk
@@ -167,12 +181,105 @@ impl AppState {
             },
         ];
 
-        Ok(Self {
+        let state = Self {
             users,
             messages: Arc::new(Mutex::new(Vec::new())),
             relay_urls,
-            use_real_relays: Arc::new(Mutex::new(false)),
-        })
+            relay_mode,
+        };
+
+        // If relay mode, connect to relays and start listening
+        if relay_mode {
+            for user in &state.users {
+                user.nostr_client.connect().await;
+            }
+            tracing::info!("Connected to Nostr relays");
+
+            // Start background tasks to listen for messages
+            state.start_relay_listeners().await?;
+        }
+
+        Ok(state)
+    }
+
+    async fn start_relay_listeners(&self) -> Result<()> {
+        for (user_index, user) in self.users.iter().enumerate() {
+            let client = user.nostr_client.clone();
+            let messages = self.messages.clone();
+            let user_name = user.name.clone();
+            let mdk = user.mdk.clone();
+            let group_id = user.mls_group_id.clone().unwrap();
+
+            // Convert group ID to hex string for filtering
+            let group_id_hex = hex::encode(group_id.as_slice());
+
+            tokio::spawn(async move {
+                tracing::info!("{} starting relay listener", user_name);
+
+                // Subscribe to group messages for OUR specific group only
+                let filter = Filter::new()
+                    .kind(nostr::Kind::MlsGroupMessage)
+                    .custom_tag(
+                        nostr::SingleLetterTag::lowercase(nostr::Alphabet::H),
+                        group_id_hex.clone()
+                    );
+
+                tracing::info!("{} subscribing with filter: kind={:?}, h={}",
+                    user_name, nostr::Kind::MlsGroupMessage, group_id_hex);
+
+                match client.subscribe(filter.clone(), None).await {
+                    Ok(sub_id) => {
+                        tracing::info!("{} subscription successful! ID: {:?}", user_name, sub_id);
+                    }
+                    Err(e) => {
+                        tracing::error!("{} subscription FAILED: {}", user_name, e);
+                        return;
+                    }
+                }
+
+                // Listen for notifications
+                tracing::info!("{} starting notification loop...", user_name);
+                let mut notifications = client.notifications();
+                let mut event_count = 0;
+
+                while let Ok(notification) = notifications.recv().await {
+                    match &notification {
+                        RelayPoolNotification::Event { relay_url, event, .. } => {
+                            event_count += 1;
+                            tracing::info!("{} received event #{} from {} (kind: {})", user_name, event_count, relay_url, event.kind);
+
+                            // Try to process the message through MDK
+                            match mdk.lock().unwrap().process_message(event) {
+                            Ok(_) => {
+                                // Get the decrypted messages
+                                if let Ok(msgs) = mdk.lock().unwrap().get_messages(&group_id) {
+                                    if let Some(last_msg) = msgs.last() {
+                                        // Use pubkey prefix as sender identifier
+                                        let sender_name = format!("User-{}", &last_msg.pubkey.to_string()[..8]);
+
+                                        messages.lock().unwrap().push(Message {
+                                            sender: sender_name,
+                                            content: last_msg.content.clone(),
+                                        });
+                                        tracing::info!("{} received message from relay", user_name);
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                tracing::debug!("{} couldn't process event: {}", user_name, e);
+                            }
+                        }
+                        }
+                        other => {
+                            tracing::debug!("{} received other notification: {:?}", user_name, other);
+                        }
+                    }
+                }
+
+                tracing::warn!("{} notification loop ended!", user_name);
+            });
+        }
+        Ok(())
     }
 
     async fn send_message(&self, user_index: usize, content: String) -> Result<()> {
@@ -181,18 +288,35 @@ impl AppState {
 
         // Create message
         let rumor = EventBuilder::new(Kind::Custom(9), &content).build(user.keys.public_key());
+
         let message_event = user
             .mdk
             .lock()
             .unwrap()
             .create_message(group_id, rumor)?;
 
-        let use_real = *self.use_real_relays.lock().unwrap();
+        if self.relay_mode {
+            // Log event details before publishing
+            tracing::info!("{} sending message event:", user.name);
+            tracing::info!("  Event ID: {}", message_event.id);
+            tracing::info!("  Kind: {}", message_event.kind);
+            tracing::info!("  Tags (first 3): {:?}", message_event.tags.iter().take(3).collect::<Vec<_>>());
 
-        if use_real {
             // Publish to real Nostr relays
-            user.nostr_client.send_event(&message_event).await?;
-            tracing::info!("Published message to Nostr relays");
+            let send_result = user.nostr_client.send_event(&message_event).await?;
+            tracing::info!("{} published message to Nostr relays", user.name);
+
+            // Log which relays accepted the event
+            for relay_url in send_result.success.iter() {
+                tracing::info!("  ✓ {} accepted the message", relay_url);
+            }
+            for relay_url in send_result.failed.keys() {
+                if let Some(error) = send_result.failed.get(relay_url) {
+                    tracing::warn!("  ✗ {} rejected the message: {}", relay_url, error);
+                }
+            }
+
+            // Don't add to message list - will come back via subscription
         } else {
             // Simulate local broadcast (no network)
             for other_user in &self.users {
@@ -202,13 +326,13 @@ impl AppState {
                     .unwrap()
                     .process_message(&message_event)?;
             }
-        }
 
-        // Add to message list
-        self.messages.lock().unwrap().push(Message {
-            sender: user.name.clone(),
-            content,
-        });
+            // Add to message list in local mode only
+            self.messages.lock().unwrap().push(Message {
+                sender: user.name.clone(),
+                content,
+            });
+        }
 
         Ok(())
     }
@@ -301,12 +425,16 @@ impl eframe::App for ChatApp {
 
                 ui.separator();
 
-                let mut use_real = self.state.use_real_relays.lock().unwrap();
-                ui.checkbox(&mut *use_real, "Use Real Nostr Relays");
-                if *use_real {
-                    ui.label("(relay.damus.io, nos.lol, relay.nostr.band)");
+                // Show relay mode (read-only, set at startup)
+                ui.label(if self.state.relay_mode {
+                    "Mode: Real Nostr Relays ✓"
                 } else {
-                    ui.label("(local simulation)");
+                    "Mode: Local Simulation"
+                });
+                if self.state.relay_mode {
+                    ui.label("(7 relays: damus, nos.lol, nostr.band, primal, bitcoiner.social, nostr.mom, oxtr.dev)");
+                } else {
+                    ui.label("(restart with --relay flag for real relays)");
                 }
             });
         });
@@ -332,9 +460,13 @@ async fn main() -> Result<()> {
         .finish();
     tracing::subscriber::set_global_default(subscriber)?;
 
+    // Check for --relay flag
+    let args: Vec<String> = std::env::args().collect();
+    let relay_mode = args.contains(&"--relay".to_string());
+
     // Initialize app state
     println!("Initializing group chat...");
-    let state = AppState::new().await?;
+    let state = AppState::new(relay_mode).await?;
     println!("Group chat initialized!");
 
     // Create single window with three panes

@@ -3552,6 +3552,7 @@ dependencies = [
  "cdk",
  "eframe",
  "egui",
+ "hex",
  "mdk-core",
  "mdk-memory-storage",
  "nostr",
