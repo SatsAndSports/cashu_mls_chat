@@ -577,14 +577,17 @@ impl ChatApp {
                         // Check if message contains a Cashu token
                         if formatted_content.contains("🎁 Cashu Token") {
                             ui.horizontal_wrapped(|ui| {
-                                ui.label(format!("{}: ", msg.sender));
+                                ui.label(egui::RichText::new(format!("{}:", &msg.sender)).strong());
                                 ui.label(
                                     egui::RichText::new(&formatted_content)
                                         .color(egui::Color32::from_rgb(255, 140, 0))
                                 );
                             });
                         } else {
-                            ui.label(format!("{}: {}", msg.sender, formatted_content));
+                            ui.horizontal_wrapped(|ui| {
+                                ui.label(egui::RichText::new(format!("{}:", &msg.sender)).strong());
+                                ui.label(&formatted_content);
+                            });
                         }
                     }
                 });
