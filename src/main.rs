@@ -16,7 +16,7 @@ use nostr_sdk::{Client, Filter, RelayPoolNotification};
 // CDK imports
 use cdk::Amount;
 use cdk::wallet::{Wallet, WalletBuilder, ReceiveOptions, SendOptions};
-use cdk::nuts::CurrencyUnit;
+use cdk::nuts::{CurrencyUnit, Token};
 use cdk::mint_url::MintUrl;
 use cdk_sqlite::WalletSqliteDatabase;
 
@@ -410,7 +410,39 @@ impl ChatApp {
         Self {
             state,
             input_texts: [String::new(), String::new(), String::new()],
-            zoom_level: 2.0,
+            zoom_level: 3.0,
+        }
+    }
+
+    fn format_message_content(content: &str) -> String {
+        // Check if message contains a cashu token
+        if let Some(token_str) = content.split_whitespace()
+            .find(|word| word.starts_with("cashuA") || word.starts_with("cashuB")) {
+
+            // Try to parse the token
+            if let Ok(token) = Token::from_str(token_str) {
+                // Get total value
+                let total_value = token.value().unwrap_or(Amount::ZERO);
+
+                // Get mint URL
+                let mint_url = token.mint_url().ok();
+
+                // Replace the token string with a nice summary
+                let before = content.split(token_str).next().unwrap_or("");
+                let after = content.split(token_str).nth(1).unwrap_or("");
+
+                if let Some(url) = mint_url {
+                    format!("{}[🎁 Cashu Token: {} sats from {}]{}",
+                        before, total_value, url, after)
+                } else {
+                    format!("{}[🎁 Cashu Token: {} sats]{}",
+                        before, total_value, after)
+                }
+            } else {
+                content.to_string()
+            }
+        } else {
+            content.to_string()
         }
     }
 
@@ -439,7 +471,8 @@ impl ChatApp {
                 .show(ui, |ui| {
                     let messages = self.state.messages.lock().unwrap();
                     for msg in messages.iter() {
-                        ui.label(format!("{}: {}", msg.sender, msg.content));
+                        let formatted_content = Self::format_message_content(&msg.content);
+                        ui.label(format!("{}: {}", msg.sender, formatted_content));
                     }
                 });
 
