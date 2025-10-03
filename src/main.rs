@@ -36,6 +36,7 @@ struct User {
 struct Message {
     sender: String,
     content: String,
+    timestamp: u64, // Unix epoch seconds
 }
 
 #[derive(Clone)]
@@ -275,11 +276,26 @@ impl AppState {
 
             tracing::info!("Loading {} historical messages from MDK storage:", msgs.len());
             for (i, msg) in msgs.iter().enumerate() {
-                let sender_name = format!("User-{}", &msg.pubkey.to_string()[..8]);
-                tracing::info!("  [{}] {} at {}: {}", i, sender_name, msg.created_at, msg.content);
+                // Parse tab-delimited format: timestamp\tusername\tcontent
+                let parts: Vec<&str> = msg.content.splitn(3, '\t').collect();
+
+                let (timestamp, sender_name, content) = if parts.len() == 3 {
+                    // Parse timestamp, username, and content from message
+                    let ts = parts[0].parse::<u64>().unwrap_or(msg.created_at.as_u64());
+                    let username = parts[1].to_string();
+                    let content = parts[2].to_string();
+                    (ts, username, content)
+                } else {
+                    // Fallback for messages without tab-delimited format
+                    let sender = format!("User-{}", &msg.pubkey.to_string()[..8]);
+                    (msg.created_at.as_u64(), sender, msg.content.clone())
+                };
+
+                tracing::info!("  [{}] {} at {}: {}", i, sender_name, timestamp, content);
                 historical_messages.push(Message {
                     sender: sender_name,
-                    content: msg.content.clone(),
+                    content,
+                    timestamp,
                 });
             }
             tracing::info!("Loaded {} historical messages in chronological order", historical_messages.len());
@@ -376,17 +392,29 @@ impl AppState {
 
                                     // Check if this is an application message (chat message)
                                     if let mdk_core::prelude::MessageProcessingResult::ApplicationMessage(msg) = result {
-                                        let sender_name = format!("User-{}", &msg.pubkey.to_string()[..8]);
-                                        let content = msg.content.clone();
+                                        // Parse tab-delimited format: timestamp\tusername\tcontent
+                                        let parts: Vec<&str> = msg.content.splitn(3, '\t').collect();
+
+                                        let (timestamp, sender_name, content) = if parts.len() == 3 {
+                                            // Parse timestamp, username, and content from message
+                                            let ts = parts[0].parse::<u64>().unwrap_or(msg.created_at.as_u64());
+                                            let username = parts[1].to_string();
+                                            let content = parts[2].to_string();
+                                            (ts, username, content)
+                                        } else {
+                                            // Fallback for messages without tab-delimited format
+                                            let sender = format!("User-{}", &msg.pubkey.to_string()[..8]);
+                                            (msg.created_at.as_u64(), sender, msg.content.clone())
+                                        };
 
                                         tracing::info!("{} received APPLICATION MESSAGE: '{}' from {} at {}",
-                                            user_name, content, sender_name, msg.created_at);
+                                            user_name, content, sender_name, timestamp);
 
-                                        // Check if this message is already in the shared list
+                                        // Check if this message is already in the shared list (by timestamp + content)
                                         let already_exists = {
                                             let messages_guard = messages.lock().unwrap();
                                             let exists = messages_guard.iter().any(|m| {
-                                                m.sender == sender_name && m.content == content
+                                                m.timestamp == timestamp && m.content == content
                                             });
                                             tracing::info!("{} checking if message exists in GUI: {}", user_name, exists);
                                             exists
@@ -396,6 +424,7 @@ impl AppState {
                                             messages.lock().unwrap().push(Message {
                                                 sender: sender_name.clone(),
                                                 content: content.clone(),
+                                                timestamp,
                                             });
                                             tracing::info!("{} added NEW message to GUI: {} says '{}'", user_name, sender_name, content);
                                         } else {
@@ -625,6 +654,7 @@ impl ChatApp {
                     self.state.messages.lock().unwrap().push(Message {
                         sender: "SYSTEM".to_string(),
                         content: format!("{}: !redeem requires a token", user_name),
+                        timestamp: nostr::Timestamp::now().as_u64(),
                     });
                     return;
                 }
@@ -639,6 +669,7 @@ impl ChatApp {
                 messages.lock().unwrap().push(Message {
                     sender: "SYSTEM".to_string(),
                     content: format!("{}: Redeeming token...", user_name),
+                    timestamp: nostr::Timestamp::now().as_u64(),
                 });
 
                 tokio::spawn(async move {
@@ -655,6 +686,7 @@ impl ChatApp {
                                         sender: "SYSTEM".to_string(),
                                         content: format!("{}: ✅ Received {} sats! New balance: {} sats",
                                             user_name_clone, amount, new_balance),
+                                        timestamp: nostr::Timestamp::now().as_u64(),
                                     });
                                 }
                                 Err(e) => {
@@ -663,6 +695,7 @@ impl ChatApp {
                                         sender: "SYSTEM".to_string(),
                                         content: format!("{}: ✅ Received {} sats (balance fetch failed)",
                                             user_name_clone, amount),
+                                        timestamp: nostr::Timestamp::now().as_u64(),
                                     });
                                 }
                             }
@@ -672,6 +705,7 @@ impl ChatApp {
                             messages.lock().unwrap().push(Message {
                                 sender: "SYSTEM".to_string(),
                                 content: format!("{}: ❌ Failed to redeem: {}", user_name_clone, e),
+                                timestamp: nostr::Timestamp::now().as_u64(),
                             });
                         }
                     }
@@ -700,6 +734,7 @@ impl ChatApp {
                     messages.lock().unwrap().push(Message {
                         sender: "SYSTEM".to_string(),
                         content: format!("{}: Redeeming last token...", user_name),
+                        timestamp: nostr::Timestamp::now().as_u64(),
                     });
 
                     tokio::spawn(async move {
@@ -716,6 +751,7 @@ impl ChatApp {
                                             sender: "SYSTEM".to_string(),
                                             content: format!("{}: ✅ Received {} sats! New balance: {} sats",
                                                 user_name_clone, amount, new_balance),
+                                            timestamp: nostr::Timestamp::now().as_u64(),
                                         });
                                     }
                                     Err(e) => {
@@ -724,6 +760,7 @@ impl ChatApp {
                                             sender: "SYSTEM".to_string(),
                                             content: format!("{}: ✅ Received {} sats (balance fetch failed)",
                                                 user_name_clone, amount),
+                                            timestamp: nostr::Timestamp::now().as_u64(),
                                         });
                                     }
                                 }
@@ -733,6 +770,7 @@ impl ChatApp {
                                 messages.lock().unwrap().push(Message {
                                     sender: "SYSTEM".to_string(),
                                     content: format!("{}: ❌ Failed to redeem: {}", user_name_clone, e),
+                                    timestamp: nostr::Timestamp::now().as_u64(),
                                 });
                             }
                         }
@@ -743,6 +781,7 @@ impl ChatApp {
                     self.state.messages.lock().unwrap().push(Message {
                         sender: "SYSTEM".to_string(),
                         content: format!("{}: No cashu token found in recent messages", user_name),
+                        timestamp: nostr::Timestamp::now().as_u64(),
                     });
                     tracing::warn!("{} no cashu token found in messages", user_name);
                 }
@@ -765,6 +804,7 @@ impl ChatApp {
                 messages.lock().unwrap().push(Message {
                     sender: "SYSTEM".to_string(),
                     content: format!("{}: Creating {}-sat token...", user_name, amount),
+                    timestamp: nostr::Timestamp::now().as_u64(),
                 });
 
                 tokio::spawn(async move {
@@ -797,6 +837,7 @@ impl ChatApp {
                                             messages.lock().unwrap().push(Message {
                                                 sender: "SYSTEM".to_string(),
                                                 content: format!("{}: ✅ Sent {}-sat token to group!", user_name_clone, amount),
+                                                timestamp: nostr::Timestamp::now().as_u64(),
                                             });
                                         }
                                         Err(e) => {
@@ -804,6 +845,7 @@ impl ChatApp {
                                             messages.lock().unwrap().push(Message {
                                                 sender: "SYSTEM".to_string(),
                                                 content: format!("{}: ❌ Failed to broadcast token: {}", user_name_clone, e),
+                                                timestamp: nostr::Timestamp::now().as_u64(),
                                             });
                                         }
                                     }
@@ -813,6 +855,7 @@ impl ChatApp {
                                     messages.lock().unwrap().push(Message {
                                         sender: "SYSTEM".to_string(),
                                         content: format!("{}: ❌ Failed to confirm send: {}", user_name_clone, e),
+                                        timestamp: nostr::Timestamp::now().as_u64(),
                                     });
                                 }
                             }
@@ -822,6 +865,7 @@ impl ChatApp {
                             messages.lock().unwrap().push(Message {
                                 sender: "SYSTEM".to_string(),
                                 content: format!("{}: ❌ Failed to create token: {}", user_name_clone, e),
+                                timestamp: nostr::Timestamp::now().as_u64(),
                             });
                         }
                     }
