@@ -582,7 +582,8 @@ impl ChatApp {
                                     .color(egui::Color32::from_rgb(255, 140, 0))
                             );
                         } else {
-                            ui.label(format!("{}: {}", msg.sender, formatted_content));
+                            ui.label(egui::RichText::new(&msg.sender).strong());
+                            ui.label(&formatted_content);
                         }
                     }
                 });
