@@ -48,15 +48,9 @@ struct AppState {
 
 impl AppState {
     async fn new(relay_mode: bool) -> Result<Self> {
-        // Use multiple real relays
+        // Use local relay
         let relay_urls = vec![
-            RelayUrl::parse("wss://relay.damus.io")?,
-            RelayUrl::parse("wss://nos.lol")?,
-            RelayUrl::parse("wss://relay.nostr.band")?,
-            RelayUrl::parse("wss://relay.primal.net")?,
-            RelayUrl::parse("wss://nostr.bitcoiner.social")?,
-            RelayUrl::parse("wss://nostr.mom")?,
-            RelayUrl::parse("wss://nostr.oxtr.dev")?,
+            RelayUrl::parse("ws://localhost:8080")?,
         ];
 
         if relay_mode {
@@ -792,9 +786,9 @@ impl eframe::App for ChatApp {
                     "Mode: Local Simulation"
                 });
                 if self.state.relay_mode {
-                    ui.label("(7 relays: damus, nos.lol, nostr.band, primal, bitcoiner.social, nostr.mom, oxtr.dev)");
+                    ui.label("(Local relay: ws://localhost:8080)");
                 } else {
-                    ui.label("(restart with --relay flag for real relays)");
+                    ui.label("(restart with --relay flag for relay mode)");
                 }
             });
         });

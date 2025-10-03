@@ -1,0 +1,32 @@
+# Nostr relay configuration
+[info]
+relay_url = "ws://localhost:8080"
+name = "Local MDK Ecash Relay"
+description = "Local Nostr relay for MDK + Cashu demo"
+pubkey = ""
+contact = ""
+
+[database]
+data_directory = "db"
+
+[network]
+port = 8080
+address = "0.0.0.0"
+
+[limits]
+messages_per_sec = 100
+max_event_bytes = 131072
+max_ws_message_bytes = 131072
+max_conn = 1000
+
+[verified_users]
+
+[pay_to_relay]
+enabled = false
+
+[logging]
+# trace, debug, info, warn, error
+level = "debug"
+
+[options]
+reject_future_seconds = 1800
