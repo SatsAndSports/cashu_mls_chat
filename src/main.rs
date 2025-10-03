@@ -9,6 +9,7 @@ use mdk_core::prelude::*;
 use mdk_memory_storage::MdkMemoryStorage;
 use nostr::event::builder::EventBuilder;
 use nostr::{EventId, Keys, Kind, RelayUrl};
+use nostr_sdk::Client;
 
 // CDK imports
 use cdk::Amount;
@@ -20,6 +21,7 @@ struct User {
     mdk: Arc<Mutex<MDK<MdkMemoryStorage>>>,
     wallet_balance: Amount,
     mls_group_id: Option<GroupId>,
+    nostr_client: Client,
 }
 
 #[derive(Clone)]
@@ -32,28 +34,44 @@ struct Message {
 struct AppState {
     users: Vec<User>,
     messages: Arc<Mutex<Vec<Message>>>,
-    relay_url: RelayUrl,
+    relay_urls: Vec<RelayUrl>,
+    use_real_relays: Arc<Mutex<bool>>,
 }
 
 impl AppState {
     async fn new() -> Result<Self> {
-        let relay_url = RelayUrl::parse("wss://relay.example.com")?;
+        // Use multiple real relays
+        let relay_urls = vec![
+            RelayUrl::parse("wss://relay.damus.io")?,
+            RelayUrl::parse("wss://nos.lol")?,
+            RelayUrl::parse("wss://relay.nostr.band")?,
+        ];
 
         // Create three users
         let alice_keys = Keys::generate();
         let alice_mdk = Arc::new(Mutex::new(MDK::new(MdkMemoryStorage::default())));
+        let alice_client = Client::new(alice_keys.clone());
 
         let bob_keys = Keys::generate();
         let bob_mdk = Arc::new(Mutex::new(MDK::new(MdkMemoryStorage::default())));
+        let bob_client = Client::new(bob_keys.clone());
 
         let carol_keys = Keys::generate();
         let carol_mdk = Arc::new(Mutex::new(MDK::new(MdkMemoryStorage::default())));
+        let carol_client = Client::new(carol_keys.clone());
+
+        // Add relays to clients (for when real relays are enabled)
+        for relay_url in &relay_urls {
+            alice_client.add_relay(relay_url.as_str()).await?;
+            bob_client.add_relay(relay_url.as_str()).await?;
+            carol_client.add_relay(relay_url.as_str()).await?;
+        }
 
         // Create key packages for Bob and Carol
         let (bob_key_package, bob_tags) = bob_mdk
             .lock()
             .unwrap()
-            .create_key_package_for_event(&bob_keys.public_key(), [relay_url.clone()])?;
+            .create_key_package_for_event(&bob_keys.public_key(), relay_urls.clone())?;
 
         let bob_key_package_event = EventBuilder::new(Kind::MlsKeyPackage, bob_key_package)
             .tags(bob_tags)
@@ -64,7 +82,7 @@ impl AppState {
         let (carol_key_package, carol_tags) = carol_mdk
             .lock()
             .unwrap()
-            .create_key_package_for_event(&carol_keys.public_key(), [relay_url.clone()])?;
+            .create_key_package_for_event(&carol_keys.public_key(), relay_urls.clone())?;
 
         let carol_key_package_event = EventBuilder::new(Kind::MlsKeyPackage, carol_key_package)
             .tags(carol_tags)
@@ -79,7 +97,7 @@ impl AppState {
             None,
             None,
             None,
-            vec![relay_url.clone()],
+            relay_urls.clone(),
             vec![
                 alice_keys.public_key(),
                 bob_keys.public_key(),
@@ -129,6 +147,7 @@ impl AppState {
                 mdk: alice_mdk,
                 wallet_balance: Amount::from(1000),
                 mls_group_id: Some(alice_group_id),
+                nostr_client: alice_client,
             },
             User {
                 name: "Bob".to_string(),
@@ -136,6 +155,7 @@ impl AppState {
                 mdk: bob_mdk,
                 wallet_balance: Amount::from(500),
                 mls_group_id: Some(bob_group_id),
+                nostr_client: bob_client,
             },
             User {
                 name: "Carol".to_string(),
@@ -143,13 +163,15 @@ impl AppState {
                 mdk: carol_mdk,
                 wallet_balance: Amount::from(750),
                 mls_group_id: Some(carol_group_id),
+                nostr_client: carol_client,
             },
         ];
 
         Ok(Self {
             users,
             messages: Arc::new(Mutex::new(Vec::new())),
-            relay_url,
+            relay_urls,
+            use_real_relays: Arc::new(Mutex::new(false)),
         })
     }
 
@@ -165,13 +187,21 @@ impl AppState {
             .unwrap()
             .create_message(group_id, rumor)?;
 
-        // Process message for all users (simulating Nostr relay broadcast)
-        for other_user in &self.users {
-            other_user
-                .mdk
-                .lock()
-                .unwrap()
-                .process_message(&message_event)?;
+        let use_real = *self.use_real_relays.lock().unwrap();
+
+        if use_real {
+            // Publish to real Nostr relays
+            user.nostr_client.send_event(&message_event).await?;
+            tracing::info!("Published message to Nostr relays");
+        } else {
+            // Simulate local broadcast (no network)
+            for other_user in &self.users {
+                other_user
+                    .mdk
+                    .lock()
+                    .unwrap()
+                    .process_message(&message_event)?;
+            }
         }
 
         // Add to message list
@@ -267,6 +297,16 @@ impl eframe::App for ChatApp {
                 }
                 if ui.button("Reset").clicked() {
                     self.zoom_level = 1.0;
+                }
+
+                ui.separator();
+
+                let mut use_real = self.state.use_real_relays.lock().unwrap();
+                ui.checkbox(&mut *use_real, "Use Real Nostr Relays");
+                if *use_real {
+                    ui.label("(relay.damus.io, nos.lol, relay.nostr.band)");
+                } else {
+                    ui.label("(local simulation)");
                 }
             });
         });

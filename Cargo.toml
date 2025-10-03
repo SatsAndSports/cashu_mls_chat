@@ -8,6 +8,7 @@ edition = "2021"
 mdk-core = { path = "./mdk/crates/mdk-core" }
 mdk-memory-storage = { path = "./mdk/crates/mdk-memory-storage" }
 nostr = "0.43"
+nostr-sdk = "0.43"
 
 # CDK - from local path
 cdk = { path = "./cdk/crates/cdk" }

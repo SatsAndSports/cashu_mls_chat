@@ -3555,6 +3555,7 @@ dependencies = [
  "mdk-core",
  "mdk-memory-storage",
  "nostr",
+ "nostr-sdk",
  "tokio",
  "tracing",
  "tracing-subscriber",
