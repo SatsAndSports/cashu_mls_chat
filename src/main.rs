@@ -269,18 +269,12 @@ impl AppState {
             let group_id_hex = hex::encode(group_id.as_slice());
 
             tokio::spawn(async move {
-                tracing::info!("{} starting relay listener", user_name);
+                tracing::info!("{} starting relay listener for group: {}", user_name, hex::encode(group_id.as_slice()));
 
-                // Subscribe to group messages for OUR specific group only
-                let filter = Filter::new()
-                    .kind(nostr::Kind::MlsGroupMessage)
-                    .custom_tag(
-                        nostr::SingleLetterTag::lowercase(nostr::Alphabet::H),
-                        group_id_hex.clone()
-                    );
+                // Subscribe to ALL events (for debugging)
+                let filter = Filter::new();
 
-                tracing::info!("{} subscribing with filter: kind={:?}, h={}",
-                    user_name, nostr::Kind::MlsGroupMessage, group_id_hex);
+                tracing::info!("{} subscribing with filter: ALL EVENTS (no filters)", user_name);
 
                 match client.subscribe(filter.clone(), None).await {
                     Ok(sub_id) => {
@@ -306,22 +300,31 @@ impl AppState {
                             // Try to process the message through MDK
                             match mdk.lock().unwrap().process_message(event) {
                             Ok(_) => {
+                                tracing::info!("{} MDK processed event successfully", user_name);
                                 // Get the decrypted messages
-                                if let Ok(msgs) = mdk.lock().unwrap().get_messages(&group_id) {
-                                    if let Some(last_msg) = msgs.last() {
-                                        // Use pubkey prefix as sender identifier
-                                        let sender_name = format!("User-{}", &last_msg.pubkey.to_string()[..8]);
+                                match mdk.lock().unwrap().get_messages(&group_id) {
+                                    Ok(msgs) => {
+                                        tracing::info!("{} has {} total messages", user_name, msgs.len());
+                                        if let Some(last_msg) = msgs.last() {
+                                            // Use pubkey prefix as sender identifier
+                                            let sender_name = format!("User-{}", &last_msg.pubkey.to_string()[..8]);
 
-                                        messages.lock().unwrap().push(Message {
-                                            sender: sender_name,
-                                            content: last_msg.content.clone(),
-                                        });
-                                        tracing::info!("{} received message from relay", user_name);
+                                            messages.lock().unwrap().push(Message {
+                                                sender: sender_name.clone(),
+                                                content: last_msg.content.clone(),
+                                            });
+                                            tracing::info!("{} added message to GUI: {} says '{}'", user_name, sender_name, last_msg.content);
+                                        } else {
+                                            tracing::warn!("{} no messages found after processing", user_name);
+                                        }
+                                    }
+                                    Err(e) => {
+                                        tracing::error!("{} failed to get messages: {}", user_name, e);
                                     }
                                 }
                             }
                             Err(e) => {
-                                tracing::debug!("{} couldn't process event: {}", user_name, e);
+                                tracing::warn!("{} couldn't process event: {}", user_name, e);
                             }
                         }
                         }
@@ -355,7 +358,13 @@ impl AppState {
             tracing::info!("{} sending message event:", user.name);
             tracing::info!("  Event ID: {}", message_event.id);
             tracing::info!("  Kind: {}", message_event.kind);
-            tracing::info!("  Tags (first 3): {:?}", message_event.tags.iter().take(3).collect::<Vec<_>>());
+            tracing::info!("  ALL Tags: {:?}", message_event.tags);
+
+            // Check for h tag specifically
+            let h_tag = message_event.tags.iter().find(|t| {
+                t.as_slice().first().map(|s| s.as_str()) == Some("h")
+            });
+            tracing::info!("  h tag found: {:?}", h_tag);
 
             // Publish to real Nostr relays
             let send_result = user.nostr_client.send_event(&message_event).await?;
@@ -404,7 +413,7 @@ impl ChatApp {
         Self {
             state,
             input_texts: [String::new(), String::new(), String::new()],
-            zoom_level: 3.0,
+            zoom_level: 2.4,
         }
     }
 

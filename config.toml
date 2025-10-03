@@ -26,7 +26,7 @@ enabled = false
 
 [logging]
 # trace, debug, info, warn, error
-level = "debug"
+level = "trace"
 
 [options]
 reject_future_seconds = 1800

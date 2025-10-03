@@ -8,5 +8,5 @@ services:
       - ./nostr-relay-data:/usr/src/app/db
       - ./config.toml:/usr/src/app/config.toml
     environment:
-      - RUST_LOG=info,nostr_rs_relay=debug
+      - RUST_LOG=trace,nostr_rs_relay=trace
     restart: unless-stopped
