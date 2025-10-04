@@ -104,7 +104,7 @@ fn to_db_error(e: JsValue) -> DbError {
     DbError::Database(Box::new(StorageError(format!("{:?}", e))))
 }
 
-#[async_trait(?Send)] // WASM doesn't support Send
+#[async_trait(?Send)]
 impl WalletDatabase for HybridWalletDatabase {
     type Err = DbError;
 
@@ -137,11 +137,12 @@ impl WalletDatabase for HybridWalletDatabase {
         old_mint_url: MintUrl,
         new_mint_url: MintUrl,
     ) -> Result<(), Self::Err> {
-        let mut state = self.state.lock().unwrap();
-        if let Some(info) = state.mints.remove(&old_mint_url) {
-            state.mints.insert(new_mint_url, info);
+        {
+            let mut state = self.state.lock().unwrap();
+            if let Some(info) = state.mints.remove(&old_mint_url) {
+                state.mints.insert(new_mint_url, info);
+            }
         }
-        drop(state);
         self.save_snapshot().await.map_err(to_db_error)?;
         Ok(())
     }
@@ -151,12 +152,13 @@ impl WalletDatabase for HybridWalletDatabase {
         mint_url: MintUrl,
         keysets: Vec<KeySetInfo>,
     ) -> Result<(), Self::Err> {
-        let mut state = self.state.lock().unwrap();
-        state.keysets.insert(mint_url, keysets.clone());
-        for keyset in keysets {
-            state.keyset_map.insert(keyset.id, keyset);
+        {
+            let mut state = self.state.lock().unwrap();
+            state.keysets.insert(mint_url, keysets.clone());
+            for keyset in keysets {
+                state.keyset_map.insert(keyset.id, keyset);
+            }
         }
-        drop(state);
         self.save_snapshot().await.map_err(to_db_error)?;
         Ok(())
     }
@@ -235,15 +237,15 @@ impl WalletDatabase for HybridWalletDatabase {
         added: Vec<ProofInfo>,
         removed_ys: Vec<PublicKey>,
     ) -> Result<(), Self::Err> {
-        let mut state = self.state.lock().unwrap();
+        {
+            let mut state = self.state.lock().unwrap();
 
-        // Remove proofs by Y value
-        state.proofs.retain(|p| !removed_ys.contains(&p.y));
+            // Remove proofs by Y value
+            state.proofs.retain(|p| !removed_ys.contains(&p.y));
 
-        // Add new proofs
-        state.proofs.extend(added);
-
-        drop(state);
+            // Add new proofs
+            state.proofs.extend(added);
+        }
         self.save_snapshot().await.map_err(to_db_error)?;
         Ok(())
     }
@@ -274,23 +276,25 @@ impl WalletDatabase for HybridWalletDatabase {
     }
 
     async fn update_proofs_state(&self, ys: Vec<PublicKey>, new_state: State) -> Result<(), Self::Err> {
-        let mut state = self.state.lock().unwrap();
-        for proof in &mut state.proofs {
-            if ys.contains(&proof.y) {
-                proof.state = new_state;
+        {
+            let mut state = self.state.lock().unwrap();
+            for proof in &mut state.proofs {
+                if ys.contains(&proof.y) {
+                    proof.state = new_state;
+                }
             }
         }
-        drop(state);
         self.save_snapshot().await.map_err(to_db_error)?;
         Ok(())
     }
 
     async fn increment_keyset_counter(&self, keyset_id: &Id, count: u32) -> Result<u32, Self::Err> {
-        let mut state = self.state.lock().unwrap();
-        let counter = state.keyset_counters.entry(*keyset_id).or_insert(0);
-        *counter += count;
-        let new_value = *counter;
-        drop(state);
+        let new_value = {
+            let mut state = self.state.lock().unwrap();
+            let counter = state.keyset_counters.entry(*keyset_id).or_insert(0);
+            *counter += count;
+            *counter
+        };
         self.save_snapshot().await.map_err(to_db_error)?;
         Ok(new_value)
     }

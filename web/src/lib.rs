@@ -8,6 +8,9 @@ use std::str::FromStr;
 mod wallet_db;
 use wallet_db::HybridWalletDatabase;
 
+mod mdk_storage;
+use mdk_storage::MdkHybridStorage;
+
 use cdk::wallet::{Wallet, WalletBuilder, ReceiveOptions};
 use cdk::nuts::{CurrencyUnit, Token};
 use cdk::mint_url::MintUrl;
@@ -205,5 +208,26 @@ pub fn receive_token(token_str: String) -> js_sys::Promise {
         .await;
 
         result.map(|amount| JsValue::from_f64(amount as f64))
+    })
+}
+
+/// Initialize MDK storage for testing persistence
+/// Returns a Promise that resolves when storage is initialized
+#[wasm_bindgen]
+pub fn init_mdk_storage() -> js_sys::Promise {
+    future_to_promise(async move {
+        let result = async {
+            log("Initializing MDK storage...");
+
+            // Create MDK storage (loads from localStorage if it exists)
+            let _storage = MdkHybridStorage::new().await?;
+
+            log("✅ MDK storage initialized!");
+
+            Ok::<(), JsValue>(())
+        }
+        .await;
+
+        result.map(|_| JsValue::UNDEFINED)
     })
 }

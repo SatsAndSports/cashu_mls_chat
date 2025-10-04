@@ -76,6 +76,12 @@
         <button onclick="showReceiveModal()">Receive e-cash</button>
     </div>
 
+    <div class="card" id="mdk-card" style="display: none;">
+        <h2>🔐 MDK Storage</h2>
+        <div id="mdk-status">Not initialized</div>
+        <button onclick="initMdk()">Initialize MDK</button>
+    </div>
+
     <!-- Receive Modal -->
     <div id="receive-modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000;">
         <div style="background: white; max-width: 600px; margin: 50px auto; padding: 20px; border-radius: 8px;">
@@ -99,6 +105,7 @@
             init_wallet,
             get_balance,
             receive_token,
+            init_mdk_storage,
             log
         } from './pkg/mdk_ecash_web.js';
 
@@ -110,7 +117,9 @@
                 log("WASM module loaded successfully");
                 await displayNpub();
                 await initializeWallet();
+                await initializeMdk();
                 document.getElementById('buttons').style.display = 'block';
+                document.getElementById('mdk-card').style.display = 'block';
                 document.getElementById('status').innerHTML = '<div class="success">✓ Ready</div>';
             } catch (err) {
                 console.error('Failed to load WASM:', err);
@@ -132,6 +141,20 @@
                 console.error('Failed to initialize wallet:', err);
                 document.getElementById('wallet-status').innerHTML =
                     `<div class="error">Failed to initialize wallet: ${err}</div>`;
+            }
+        }
+
+        async function initializeMdk() {
+            try {
+                document.getElementById('mdk-status').textContent = 'Initializing MDK storage...';
+
+                await init_mdk_storage();
+                document.getElementById('mdk-status').innerHTML = '<div class="success">✓ MDK storage ready</div>';
+                log("MDK storage initialized");
+            } catch (err) {
+                console.error('Failed to initialize MDK:', err);
+                document.getElementById('mdk-status').innerHTML =
+                    `<div class="error">Failed to initialize MDK: ${err}</div>`;
             }
         }
 
@@ -209,6 +232,20 @@
             } catch (err) {
                 console.error('Failed to receive token:', err);
                 statusDiv.innerHTML = `<div class="error">Failed to receive: ${err}</div>`;
+            }
+        };
+
+        window.initMdk = async function() {
+            const statusDiv = document.getElementById('mdk-status');
+            statusDiv.innerHTML = 'Initializing MDK storage...';
+
+            try {
+                await init_mdk_storage();
+                statusDiv.innerHTML = '<div class="success">✅ MDK storage initialized and persisted!</div>';
+                log('MDK storage ready. Check localStorage for mdk_state');
+            } catch (err) {
+                console.error('Failed to initialize MDK:', err);
+                statusDiv.innerHTML = `<div class="error">Failed to initialize: ${err}</div>`;
             }
         };
 
