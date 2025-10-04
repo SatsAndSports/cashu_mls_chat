@@ -318,20 +318,9 @@ impl AppState {
 
             tracing::info!("Loading {} historical messages from MDK storage:", msgs.len());
             for (i, msg) in msgs.iter().enumerate() {
-                // Parse tab-delimited format: timestamp\tusername\tcontent
-                let parts: Vec<&str> = msg.content.splitn(3, '\t').collect();
-
-                let (timestamp, sender_name, content) = if parts.len() == 3 {
-                    // Parse timestamp, username, and content from message
-                    let ts = parts[0].parse::<u64>().unwrap_or(msg.created_at.as_u64());
-                    let username = parts[1].to_string();
-                    let content = parts[2].to_string();
-                    (ts, username, content)
-                } else {
-                    // Fallback for messages without tab-delimited format
-                    let sender = format!("User-{}", &msg.pubkey.to_string()[..8]);
-                    (msg.created_at.as_u64(), sender, msg.content.clone())
-                };
+                let sender_name = format!("User-{}", &msg.pubkey.to_string()[..8]);
+                let timestamp = msg.created_at.as_u64();
+                let content = msg.content.clone();
 
                 tracing::info!("  [{}] {} at {}: {}", i, sender_name, timestamp, content);
                 historical_messages.push(Message {
@@ -434,20 +423,9 @@ impl AppState {
 
                                     // Check if this is an application message (chat message)
                                     if let mdk_core::prelude::MessageProcessingResult::ApplicationMessage(msg) = result {
-                                        // Parse tab-delimited format: timestamp\tusername\tcontent
-                                        let parts: Vec<&str> = msg.content.splitn(3, '\t').collect();
-
-                                        let (timestamp, sender_name, content) = if parts.len() == 3 {
-                                            // Parse timestamp, username, and content from message
-                                            let ts = parts[0].parse::<u64>().unwrap_or(msg.created_at.as_u64());
-                                            let username = parts[1].to_string();
-                                            let content = parts[2].to_string();
-                                            (ts, username, content)
-                                        } else {
-                                            // Fallback for messages without tab-delimited format
-                                            let sender = format!("User-{}", &msg.pubkey.to_string()[..8]);
-                                            (msg.created_at.as_u64(), sender, msg.content.clone())
-                                        };
+                                        let sender_name = format!("User-{}", &msg.pubkey.to_string()[..8]);
+                                        let timestamp = msg.created_at.as_u64();
+                                        let content = msg.content.clone();
 
                                         tracing::info!("{} received APPLICATION MESSAGE: '{}' from {} at {}",
                                             user_name, content, sender_name, timestamp);
@@ -497,12 +475,8 @@ impl AppState {
         let user = &self.users[user_index];
         let group_id = user.mls_group_id.as_ref().unwrap();
 
-        // Prepend timestamp (Unix epoch seconds) and username to message content
-        let now = nostr::Timestamp::now();
-        let content_with_metadata = format!("{}\t{}\t{}", now.as_u64(), user.name, content);
-
         // Create message with NIP-13 Proof of Work (difficulty: 21)
-        let rumor = EventBuilder::new(Kind::Custom(9), &content_with_metadata)
+        let rumor = EventBuilder::new(Kind::Custom(9), &content)
             .pow(22)
             .build(user.keys.public_key());
 
