@@ -37,6 +37,7 @@ struct Message {
     sender: String,
     content: String,
     timestamp: u64, // Unix epoch seconds
+    wrapper_event_id: EventId, // Nostr event ID for deduplication
 }
 
 #[derive(Clone)]
@@ -54,6 +55,7 @@ fn add_system_message(messages: &Arc<Mutex<Vec<Message>>>, content: String) {
         sender: "SYSTEM".to_string(),
         content,
         timestamp: nostr::Timestamp::now().as_u64(),
+        wrapper_event_id: EventId::all_zeros(), // System messages don't have real event IDs
     });
 }
 
@@ -321,12 +323,14 @@ impl AppState {
                 let sender_name = format!("User-{}", &msg.pubkey.to_string()[..8]);
                 let timestamp = msg.created_at.as_u64();
                 let content = msg.content.clone();
+                let wrapper_event_id = msg.wrapper_event_id;
 
                 tracing::info!("  [{}] {} at {}: {}", i, sender_name, timestamp, content);
                 historical_messages.push(Message {
                     sender: sender_name,
                     content,
                     timestamp,
+                    wrapper_event_id,
                 });
             }
             tracing::info!("Loaded {} historical messages in chronological order", historical_messages.len());
@@ -426,15 +430,16 @@ impl AppState {
                                         let sender_name = format!("User-{}", &msg.pubkey.to_string()[..8]);
                                         let timestamp = msg.created_at.as_u64();
                                         let content = msg.content.clone();
+                                        let wrapper_event_id = msg.wrapper_event_id;
 
                                         tracing::info!("{} received APPLICATION MESSAGE: '{}' from {} at {}",
                                             user_name, content, sender_name, timestamp);
 
-                                        // Check if this message is already in the shared list (by timestamp + content)
+                                        // Check if this message is already in the shared list (by wrapper_event_id)
                                         let already_exists = {
                                             let messages_guard = messages.lock().unwrap();
                                             let exists = messages_guard.iter().any(|m| {
-                                                m.timestamp == timestamp && m.content == content
+                                                m.wrapper_event_id == wrapper_event_id
                                             });
                                             tracing::info!("{} checking if message exists in GUI: {}", user_name, exists);
                                             exists
@@ -445,6 +450,7 @@ impl AppState {
                                                 sender: sender_name.clone(),
                                                 content: content.clone(),
                                                 timestamp,
+                                                wrapper_event_id,
                                             });
                                             tracing::info!("{} added NEW message to GUI: {} says '{}'", user_name, sender_name, content);
                                         } else {
@@ -684,11 +690,7 @@ impl ChatApp {
             "!redeem" => {
                 if parts.len() < 2 {
                     tracing::warn!("{} !redeem requires a token", user_name);
-                    self.state.messages.lock().unwrap().push(Message {
-                        sender: "SYSTEM".to_string(),
-                        content: format!("{}: !redeem requires a token", user_name),
-                        timestamp: nostr::Timestamp::now().as_u64(),
-                    });
+                    add_system_message(&self.state.messages, format!("{}: !redeem requires a token", user_name));
                     return;
                 }
 
@@ -699,11 +701,7 @@ impl ChatApp {
                 let balances = self.state.balances.clone();
 
                 // Add initial feedback
-                messages.lock().unwrap().push(Message {
-                    sender: "SYSTEM".to_string(),
-                    content: format!("{}: Redeeming token...", user_name),
-                    timestamp: nostr::Timestamp::now().as_u64(),
-                });
+                add_system_message(&messages, format!("{}: Redeeming token...", user_name));
 
                 tokio::spawn(async move {
                     match wallet_clone.receive(&token, ReceiveOptions::default()).await {
@@ -715,31 +713,19 @@ impl ChatApp {
                             match wallet_clone.total_balance().await {
                                 Ok(new_balance) => {
                                     balances.lock().unwrap()[user_index] = new_balance.into();
-                                    messages.lock().unwrap().push(Message {
-                                        sender: "SYSTEM".to_string(),
-                                        content: format!("{}: ✅ Received {} sats! New balance: {} sats",
-                                            user_name_clone, amount, new_balance),
-                                        timestamp: nostr::Timestamp::now().as_u64(),
-                                    });
+                                    add_system_message(&messages, format!("{}: ✅ Received {} sats! New balance: {} sats",
+                                        user_name_clone, amount, new_balance));
                                 }
                                 Err(e) => {
                                     tracing::error!("{} failed to fetch balance: {}", user_name_clone, e);
-                                    messages.lock().unwrap().push(Message {
-                                        sender: "SYSTEM".to_string(),
-                                        content: format!("{}: ✅ Received {} sats (balance fetch failed)",
-                                            user_name_clone, amount),
-                                        timestamp: nostr::Timestamp::now().as_u64(),
-                                    });
+                                    add_system_message(&messages, format!("{}: ✅ Received {} sats (balance fetch failed)",
+                                        user_name_clone, amount));
                                 }
                             }
                         }
                         Err(e) => {
                             tracing::error!("{} failed to redeem token: {}", user_name_clone, e);
-                            messages.lock().unwrap().push(Message {
-                                sender: "SYSTEM".to_string(),
-                                content: format!("{}: ❌ Failed to redeem: {}", user_name_clone, e),
-                                timestamp: nostr::Timestamp::now().as_u64(),
-                            });
+                            add_system_message(&messages, format!("{}: ❌ Failed to redeem: {}", user_name_clone, e));
                         }
                     }
                 });
@@ -764,11 +750,7 @@ impl ChatApp {
                     let balances = self.state.balances.clone();
 
                     // Add initial feedback
-                    messages.lock().unwrap().push(Message {
-                        sender: "SYSTEM".to_string(),
-                        content: format!("{}: Redeeming last token...", user_name),
-                        timestamp: nostr::Timestamp::now().as_u64(),
-                    });
+                    add_system_message(&messages, format!("{}: Redeeming last token...", user_name));
 
                     tokio::spawn(async move {
                         match wallet_clone.receive(&token, ReceiveOptions::default()).await {
@@ -780,42 +762,26 @@ impl ChatApp {
                                 match wallet_clone.total_balance().await {
                                     Ok(new_balance) => {
                                         balances.lock().unwrap()[user_index] = new_balance.into();
-                                        messages.lock().unwrap().push(Message {
-                                            sender: "SYSTEM".to_string(),
-                                            content: format!("{}: ✅ Received {} sats! New balance: {} sats",
-                                                user_name_clone, amount, new_balance),
-                                            timestamp: nostr::Timestamp::now().as_u64(),
-                                        });
+                                        add_system_message(&messages, format!("{}: ✅ Received {} sats! New balance: {} sats",
+                                            user_name_clone, amount, new_balance));
                                     }
                                     Err(e) => {
                                         tracing::error!("{} failed to fetch balance: {}", user_name_clone, e);
-                                        messages.lock().unwrap().push(Message {
-                                            sender: "SYSTEM".to_string(),
-                                            content: format!("{}: ✅ Received {} sats (balance fetch failed)",
-                                                user_name_clone, amount),
-                                            timestamp: nostr::Timestamp::now().as_u64(),
-                                        });
+                                        add_system_message(&messages, format!("{}: ✅ Received {} sats (balance fetch failed)",
+                                            user_name_clone, amount));
                                     }
                                 }
                             }
                             Err(e) => {
                                 tracing::error!("{} failed to redeem token: {}", user_name_clone, e);
-                                messages.lock().unwrap().push(Message {
-                                    sender: "SYSTEM".to_string(),
-                                    content: format!("{}: ❌ Failed to redeem: {}", user_name_clone, e),
-                                    timestamp: nostr::Timestamp::now().as_u64(),
-                                });
+                                add_system_message(&messages, format!("{}: ❌ Failed to redeem: {}", user_name_clone, e));
                             }
                         }
                     });
 
                     tracing::info!("{} attempting to redeem last token", user_name);
                 } else {
-                    self.state.messages.lock().unwrap().push(Message {
-                        sender: "SYSTEM".to_string(),
-                        content: format!("{}: No cashu token found in recent messages", user_name),
-                        timestamp: nostr::Timestamp::now().as_u64(),
-                    });
+                    add_system_message(&self.state.messages, format!("{}: No cashu token found in recent messages", user_name));
                     tracing::warn!("{} no cashu token found in messages", user_name);
                 }
             }
@@ -834,11 +800,7 @@ impl ChatApp {
                 let state = self.state.clone();
 
                 // Add initial feedback
-                messages.lock().unwrap().push(Message {
-                    sender: "SYSTEM".to_string(),
-                    content: format!("{}: Creating {}-sat token...", user_name, amount),
-                    timestamp: nostr::Timestamp::now().as_u64(),
-                });
+                add_system_message(&messages, format!("{}: Creating {}-sat token...", user_name, amount));
 
                 tokio::spawn(async move {
                     // Prepare send
@@ -867,39 +829,23 @@ impl ChatApp {
 
                                     match send_result {
                                         Ok(_) => {
-                                            messages.lock().unwrap().push(Message {
-                                                sender: "SYSTEM".to_string(),
-                                                content: format!("{}: ✅ Sent {}-sat token to group!", user_name_clone, amount),
-                                                timestamp: nostr::Timestamp::now().as_u64(),
-                                            });
+                                            add_system_message(&messages, format!("{}: ✅ Sent {}-sat token to group!", user_name_clone, amount));
                                         }
                                         Err(e) => {
                                             tracing::error!("{} failed to send message: {}", user_name_clone, e);
-                                            messages.lock().unwrap().push(Message {
-                                                sender: "SYSTEM".to_string(),
-                                                content: format!("{}: ❌ Failed to broadcast token: {}", user_name_clone, e),
-                                                timestamp: nostr::Timestamp::now().as_u64(),
-                                            });
+                                            add_system_message(&messages, format!("{}: ❌ Failed to broadcast token: {}", user_name_clone, e));
                                         }
                                     }
                                 }
                                 Err(e) => {
                                     tracing::error!("{} failed to confirm send: {}", user_name_clone, e);
-                                    messages.lock().unwrap().push(Message {
-                                        sender: "SYSTEM".to_string(),
-                                        content: format!("{}: ❌ Failed to confirm send: {}", user_name_clone, e),
-                                        timestamp: nostr::Timestamp::now().as_u64(),
-                                    });
+                                    add_system_message(&messages, format!("{}: ❌ Failed to confirm send: {}", user_name_clone, e));
                                 }
                             }
                         }
                         Err(e) => {
                             tracing::error!("{} failed to prepare send: {}", user_name_clone, e);
-                            messages.lock().unwrap().push(Message {
-                                sender: "SYSTEM".to_string(),
-                                content: format!("{}: ❌ Failed to create token: {}", user_name_clone, e),
-                                timestamp: nostr::Timestamp::now().as_u64(),
-                            });
+                            add_system_message(&messages, format!("{}: ❌ Failed to create token: {}", user_name_clone, e));
                         }
                     }
                 });

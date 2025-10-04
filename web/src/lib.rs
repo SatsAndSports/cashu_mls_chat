@@ -23,6 +23,7 @@ use mdk_core::MDK;
 const RELAYS: &[&str] = &[
     "ws://localhost:8080",
     "wss://nostr.chaima.info",
+    "wss://orangesync.tech",
 ];
 
 /// Helper function to create MDK instance
