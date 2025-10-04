@@ -295,6 +295,89 @@ pub fn create_and_broadcast_key_package() -> js_sys::Promise {
     })
 }
 
+/// Get all groups from MDK storage
+/// Returns a Promise that resolves to a JSON array of groups
+#[wasm_bindgen]
+pub fn get_groups() -> js_sys::Promise {
+    future_to_promise(async move {
+        let result = async {
+            log("Fetching groups from MDK...");
+
+            let mdk = create_mdk().await?;
+            let groups = mdk
+                .get_groups()
+                .map_err(|e| JsValue::from_str(&format!("Failed to get groups: {}", e)))?;
+
+            log(&format!("Found {} group(s)", groups.len()));
+
+            // Convert to JSON array
+            let groups_json: Vec<_> = groups.iter().map(|g| {
+                serde_json::json!({
+                    "id": hex::encode(g.mls_group_id.as_slice()),
+                    "name": g.name,
+                    "description": g.description,
+                    "image_hash": g.image_hash.map(|h| hex::encode(h)),
+                    "last_message_at": g.last_message_at.map(|t| t.as_u64()),
+                })
+            }).collect();
+
+            let json = serde_json::to_string(&groups_json)
+                .map_err(|e| JsValue::from_str(&format!("Failed to serialize: {}", e)))?;
+
+            Ok::<String, JsValue>(json)
+        }
+        .await;
+
+        result.map(|json| JsValue::from_str(&json))
+    })
+}
+
+/// Check for and auto-accept any pending Welcome messages from MDK storage
+/// Returns a Promise that resolves to the number of groups joined
+#[wasm_bindgen]
+pub fn process_pending_welcomes() -> js_sys::Promise {
+    future_to_promise(async move {
+        let result = async {
+            log("Checking for pending Welcome messages...");
+
+            // Get MDK instance
+            let mdk = create_mdk().await?;
+
+            // Get all pending welcomes and auto-accept them
+            let pending_welcomes = mdk.get_pending_welcomes()
+                .map_err(|e| JsValue::from_str(&format!("Failed to get pending welcomes: {}", e)))?;
+
+            log(&format!("Found {} pending welcome(s) to accept", pending_welcomes.len()));
+
+            let mut accepted = 0;
+            for welcome in pending_welcomes {
+                log(&format!("Auto-accepting welcome for group: {}", hex::encode(welcome.mls_group_id.as_slice())));
+
+                match mdk.accept_welcome(&welcome) {
+                    Ok(_) => {
+                        log("  ✓ Welcome accepted, joined group!");
+                        accepted += 1;
+                    }
+                    Err(e) => {
+                        log(&format!("  ✗ Failed to accept: {}", e));
+                    }
+                }
+            }
+
+            if accepted > 0 {
+                log(&format!("✅ Joined {} new group(s)", accepted));
+            } else {
+                log("No new groups to join");
+            }
+
+            Ok::<u32, JsValue>(accepted)
+        }
+        .await;
+
+        result.map(|count| JsValue::from_f64(count as f64))
+    })
+}
+
 /// Fetch KeyPackages from Nostr relays
 /// Returns a Promise that resolves to a JSON array of KeyPackage info with relay sources
 #[wasm_bindgen]

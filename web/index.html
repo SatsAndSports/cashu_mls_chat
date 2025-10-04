@@ -5,17 +5,58 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>MDK Ecash Web Client</title>
     <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
         body {
             font-family: Arial, sans-serif;
-            max-width: 800px;
-            margin: 50px auto;
-            padding: 20px;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
         }
-        .card {
-            border: 1px solid #ddd;
-            border-radius: 8px;
+        #header {
+            background: #0066cc;
+            color: white;
+            padding: 15px 20px;
+            font-size: 1.2em;
+        }
+        #main {
+            display: flex;
+            flex: 1;
+            overflow: hidden;
+        }
+        #sidebar {
+            width: 250px;
+            background: #f5f5f5;
+            border-right: 1px solid #ddd;
+            overflow-y: auto;
+        }
+        .nav-item {
+            padding: 15px 20px;
+            cursor: pointer;
+            border-bottom: 1px solid #ddd;
+            transition: background 0.2s;
+        }
+        .nav-item:hover {
+            background: #e6e6e6;
+        }
+        .nav-item.active {
+            background: white;
+            border-left: 3px solid #0066cc;
+            padding-left: 17px;
+        }
+        #content {
+            flex: 1;
             padding: 20px;
-            margin: 20px 0;
+            overflow-y: auto;
+        }
+        .section {
+            display: none;
+        }
+        .section.active {
+            display: block;
         }
         .npub {
             font-family: monospace;
@@ -23,6 +64,7 @@
             padding: 10px;
             border-radius: 4px;
             word-break: break-all;
+            margin: 10px 0;
         }
         button {
             background: #0066cc;
@@ -31,7 +73,7 @@
             padding: 10px 20px;
             border-radius: 4px;
             cursor: pointer;
-            margin: 5px;
+            margin: 5px 5px 5px 0;
         }
         button:hover {
             background: #0052a3;
@@ -50,38 +92,78 @@
             border-radius: 4px;
             margin: 10px 0;
         }
+        .group-item {
+            padding: 10px;
+            background: #f5f5f5;
+            margin: 5px 0;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        .group-item:hover {
+            background: #e6e6e6;
+        }
+        .group-item.active {
+            background: #0066cc;
+            color: white;
+        }
     </style>
 </head>
 <body>
-    <h1>🔐 MDK Ecash Web Client</h1>
+    <div id="header">🔐 MDK Ecash Web Client</div>
 
-    <div class="card">
-        <h2>Nostr Identity</h2>
-        <div id="status">Loading WASM module...</div>
-        <div id="npub-container" style="display: none;">
-            <p><strong>Your npub:</strong></p>
-            <div class="npub" id="npub"></div>
+    <div id="main">
+        <!-- Sidebar -->
+        <div id="sidebar">
+            <div class="nav-item active" onclick="showSection('identity')">🔐 Nostr Identity</div>
+            <div class="nav-item" onclick="showSection('wallet')">💰 Wallet</div>
+            <div class="nav-item" onclick="showSection('keypackages')">🔑 Key Packages</div>
+            <div class="nav-item" onclick="showSection('groups')">📱 Groups</div>
         </div>
-        <div id="buttons" style="display: none;">
-            <button onclick="newKeys()">Generate New Keys</button>
-            <button onclick="clearKeys()">Clear Keys</button>
+
+        <!-- Content Area -->
+        <div id="content">
+            <!-- Identity Section -->
+            <div id="identity-section" class="section active">
+                <h2>Nostr Identity</h2>
+                <div id="status">Loading WASM module...</div>
+                <div id="npub-container" style="display: none;">
+                    <p><strong>Your npub:</strong></p>
+                    <div class="npub" id="npub"></div>
+                </div>
+                <div id="buttons" style="display: none;">
+                    <button onclick="newKeys()">Generate New Keys</button>
+                    <button onclick="clearKeys()">Clear Keys</button>
+                </div>
+            </div>
+
+            <!-- Wallet Section -->
+            <div id="wallet-section" class="section">
+                <h2>💰 Wallet</h2>
+                <p>Mint: <code>https://nofees.testnut.cashu.space</code></p>
+                <p style="margin-top: 10px;">Balance: <strong><span id="balance">0</span> sats</strong></p>
+                <div id="wallet-status">Initializing wallet...</div>
+                <button onclick="showReceiveModal()">Receive e-cash</button>
+            </div>
+
+            <!-- Key Packages Section -->
+            <div id="keypackages-section" class="section">
+                <h2>🔑 Key Packages</h2>
+                <div id="keypackages-status">Loading...</div>
+                <div id="keypackages-list"></div>
+                <button onclick="createKeyPackage()">Create & Broadcast New KeyPackage</button>
+                <button onclick="refreshKeyPackages()">Refresh from Nostr</button>
+            </div>
+
+            <!-- Groups Section -->
+            <div id="groups-section" class="section">
+                <h2>📱 Groups</h2>
+                <div id="groups-status">Loading groups...</div>
+                <div id="groups-list"></div>
+                <button onclick="refreshGroups()">Refresh Groups</button>
+                <button onclick="processWelcomes()">Check for Invites</button>
+            </div>
         </div>
-    </div>
-
-    <div class="card" id="wallet-card" style="display: none;">
-        <h2>💰 Wallet</h2>
-        <p>Mint: <code>https://nofees.testnut.cashu.space</code></p>
-        <p>Balance: <span id="balance">0</span> sats</p>
-        <div id="wallet-status">Initializing wallet...</div>
-        <button onclick="showReceiveModal()">Receive e-cash</button>
-    </div>
-
-    <div class="card" id="keypackages-card" style="display: none;">
-        <h2>🔑 Key Packages</h2>
-        <div id="keypackages-status">Loading...</div>
-        <div id="keypackages-list"></div>
-        <button onclick="createKeyPackage()">Create & Broadcast New KeyPackage</button>
-        <button onclick="refreshKeyPackages()">Refresh from Nostr</button>
     </div>
 
     <!-- Receive Modal -->
@@ -109,10 +191,28 @@
             receive_token,
             create_and_broadcast_key_package,
             fetch_my_key_packages,
+            get_groups,
+            process_pending_welcomes,
             log
         } from './pkg/mdk_ecash_web.js';
 
         let wasm;
+
+        // Navigation
+        window.showSection = function(sectionName) {
+            // Hide all sections
+            document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+            document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+
+            // Show selected section
+            document.getElementById(`${sectionName}-section`).classList.add('active');
+            event.target.classList.add('active');
+
+            // Load content if needed
+            if (sectionName === 'groups') {
+                refreshGroups();
+            }
+        };
 
         async function loadWasm() {
             try {
@@ -121,8 +221,8 @@
                 await displayNpub();
                 await initializeWallet();
                 await initializeKeyPackages();
+                await initializeGroups();
                 document.getElementById('buttons').style.display = 'block';
-                document.getElementById('keypackages-card').style.display = 'block';
                 document.getElementById('status').innerHTML = '<div class="success">✓ Ready</div>';
             } catch (err) {
                 console.error('Failed to load WASM:', err);
@@ -133,7 +233,6 @@
 
         async function initializeWallet() {
             try {
-                document.getElementById('wallet-card').style.display = 'block';
                 document.getElementById('wallet-status').textContent = 'Initializing wallet...';
 
                 const balance = await init_wallet();
@@ -188,6 +287,64 @@
                     `<div class="error">Failed to load: ${err}</div>`;
             }
         }
+
+        async function initializeGroups() {
+            await refreshGroups();
+        }
+
+        window.refreshGroups = async function() {
+            try {
+                document.getElementById('groups-status').textContent = 'Loading groups...';
+
+                const groupsJson = await get_groups();
+                const groups = JSON.parse(groupsJson);
+
+                const listDiv = document.getElementById('groups-list');
+                if (groups.length === 0) {
+                    listDiv.innerHTML = '<p style="color: #666;">No groups yet. Accept an invite to get started!</p>';
+                    document.getElementById('groups-status').innerHTML = '<div class="success">✓ Ready (0 groups)</div>';
+                } else {
+                    listDiv.innerHTML = groups.map(group => {
+                        const lastMessage = group.last_message_at
+                            ? new Date(group.last_message_at * 1000).toLocaleString()
+                            : 'No messages yet';
+                        return `
+                        <div class="group-item">
+                            <strong>${group.name || 'Unnamed Group'}</strong><br>
+                            <small>${group.description || 'No description'}</small><br>
+                            <small style="color: #666;">Last activity: ${lastMessage}</small>
+                        </div>`;
+                    }).join('');
+                    document.getElementById('groups-status').innerHTML =
+                        `<div class="success">✓ Found ${groups.length} group(s)</div>`;
+                }
+
+                log(`Loaded ${groups.length} group(s)`);
+            } catch (err) {
+                console.error('Failed to fetch groups:', err);
+                document.getElementById('groups-status').innerHTML =
+                    `<div class="error">Failed to load: ${err}</div>`;
+            }
+        };
+
+        window.processWelcomes = async function() {
+            const statusDiv = document.getElementById('groups-status');
+            statusDiv.innerHTML = 'Checking for new group invites...';
+
+            try {
+                const count = await process_pending_welcomes();
+                if (count > 0) {
+                    statusDiv.innerHTML = `<div class="success">✅ Joined ${count} new group(s)!</div>`;
+                    // Refresh groups list
+                    await refreshGroups();
+                } else {
+                    statusDiv.innerHTML = '<div class="success">No new invites</div>';
+                }
+            } catch (err) {
+                console.error('Failed to process welcomes:', err);
+                statusDiv.innerHTML = `<div class="error">Failed to process invites: ${err}</div>`;
+            }
+        };
 
         async function displayNpub() {
             try {
