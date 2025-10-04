@@ -10,7 +10,7 @@ use tracing_subscriber::FmtSubscriber;
 use mdk_core::prelude::*;
 use mdk_sqlite_storage::MdkSqliteStorage;
 use nostr::event::builder::EventBuilder;
-use nostr::{EventId, Keys, Kind, RelayUrl};
+use nostr::{EventId, FromBech32, Keys, Kind, RelayUrl};
 use nostr_sdk::{Client, Filter, RelayPoolNotification};
 use std::fs;
 use std::path::Path;
@@ -922,6 +922,158 @@ impl ChatApp {
                 });
 
                 tracing::info!("{} creating token for {} sats", user_name, amount);
+            }
+            "!invite" => {
+                if parts.len() < 2 {
+                    tracing::warn!("{} !invite requires an npub", user_name);
+                    self.state.messages.lock().unwrap().push(Message {
+                        sender: "SYSTEM".to_string(),
+                        content: format!("{}: !invite requires an npub", user_name),
+                        timestamp: nostr::Timestamp::now().as_u64(),
+                    });
+                    return;
+                }
+
+                let npub_str = parts[1].to_string();
+                let user_name_clone = user_name.clone();
+                let mdk = self.state.users[user_index].mdk.clone();
+                let client = self.state.users[user_index].nostr_client.clone();
+                let group_id = self.state.users[user_index].mls_group_id.clone();
+                let keys = self.state.users[user_index].keys.clone();
+                let messages = self.state.messages.clone();
+
+                // Add initial feedback
+                messages.lock().unwrap().push(Message {
+                    sender: "SYSTEM".to_string(),
+                    content: format!("{}: Fetching KeyPackages for {}...", user_name, npub_str),
+                    timestamp: nostr::Timestamp::now().as_u64(),
+                });
+
+                let npub_str = npub_str.clone(); // Clone for async block
+                tokio::spawn(async move {
+                    // Parse npub
+                    let pubkey = match nostr::PublicKey::from_bech32(&npub_str) {
+                        Ok(pk) => pk,
+                        Err(e) => {
+                            tracing::error!("{} failed to parse npub {}: {}", user_name_clone, npub_str, e);
+                            messages.lock().unwrap().push(Message {
+                                sender: "SYSTEM".to_string(),
+                                content: format!("{}: ❌ Invalid npub: {}", user_name_clone, e),
+                                timestamp: nostr::Timestamp::now().as_u64(),
+                            });
+                            return;
+                        }
+                    };
+
+                    // Query relays for KeyPackages (kind 443)
+                    let filter = nostr::Filter::new()
+                        .kind(nostr::Kind::Custom(443))
+                        .author(pubkey);
+
+                    match client.fetch_events(filter, std::time::Duration::from_secs(10)).await {
+                        Ok(events) if !events.is_empty() => {
+                            tracing::info!("{} found {} KeyPackage(s) for {}", user_name_clone, events.len(), npub_str);
+
+                            // Get the newest KeyPackage
+                            let newest_event = events.into_iter()
+                                .max_by_key(|e| e.created_at)
+                                .unwrap();
+
+                            messages.lock().unwrap().push(Message {
+                                sender: "SYSTEM".to_string(),
+                                content: format!("{}: Found KeyPackage, adding to group...", user_name_clone),
+                                timestamp: nostr::Timestamp::now().as_u64(),
+                            });
+
+                            // Get group_id
+                            let group_id = match group_id {
+                                Some(gid) => gid,
+                                None => {
+                                    messages.lock().unwrap().push(Message {
+                                        sender: "SYSTEM".to_string(),
+                                        content: format!("{}: ❌ No active group", user_name_clone),
+                                        timestamp: nostr::Timestamp::now().as_u64(),
+                                    });
+                                    return;
+                                }
+                            };
+
+                            // Add member to group
+                            let result = {
+                                let mdk_guard = mdk.lock().unwrap();
+                                mdk_guard.add_members(&group_id, &[newest_event])
+                            }; // mdk_guard is dropped here before any await
+
+                            match result {
+                                Ok(result) => {
+                                    tracing::info!("{} successfully added {} to group", user_name_clone, npub_str);
+
+                                    // Publish commit event
+                                    match client.send_event(&result.evolution_event).await {
+                                        Ok(_) => {
+                                            tracing::info!("{} published commit event", user_name_clone);
+                                        }
+                                        Err(e) => {
+                                            tracing::error!("{} failed to publish commit: {}", user_name_clone, e);
+                                        }
+                                    }
+
+                                    // Publish welcome events (if any)
+                                    if let Some(welcome_rumors) = result.welcome_rumors {
+                                        for welcome_unsigned in welcome_rumors {
+                                            // Sign the UnsignedEvent to create an Event
+                                            match welcome_unsigned.sign(&keys).await {
+                                                Ok(welcome_event) => {
+                                                    match client.send_event(&welcome_event).await {
+                                                        Ok(_) => {
+                                                            tracing::info!("{} published welcome event", user_name_clone);
+                                                        }
+                                                        Err(e) => {
+                                                            tracing::error!("{} failed to publish welcome: {}", user_name_clone, e);
+                                                        }
+                                                    }
+                                                }
+                                                Err(e) => {
+                                                    tracing::error!("{} failed to sign welcome: {}", user_name_clone, e);
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    messages.lock().unwrap().push(Message {
+                                        sender: "SYSTEM".to_string(),
+                                        content: format!("{}: ✅ Invited {} to the group!", user_name_clone, npub_str),
+                                        timestamp: nostr::Timestamp::now().as_u64(),
+                                    });
+                                }
+                                Err(e) => {
+                                    tracing::error!("{} failed to add member: {}", user_name_clone, e);
+                                    messages.lock().unwrap().push(Message {
+                                        sender: "SYSTEM".to_string(),
+                                        content: format!("{}: ❌ Failed to add member: {}", user_name_clone, e),
+                                        timestamp: nostr::Timestamp::now().as_u64(),
+                                    });
+                                }
+                            }
+                        }
+                        Ok(_) => {
+                            tracing::warn!("{} no KeyPackages found for {}", user_name_clone, npub_str);
+                            messages.lock().unwrap().push(Message {
+                                sender: "SYSTEM".to_string(),
+                                content: format!("{}: ❌ No KeyPackages found for {}", user_name_clone, npub_str),
+                                timestamp: nostr::Timestamp::now().as_u64(),
+                            });
+                        }
+                        Err(e) => {
+                            tracing::error!("{} failed to fetch KeyPackages: {}", user_name_clone, e);
+                            messages.lock().unwrap().push(Message {
+                                sender: "SYSTEM".to_string(),
+                                content: format!("{}: ❌ Failed to fetch KeyPackages: {}", user_name_clone, e),
+                                timestamp: nostr::Timestamp::now().as_u64(),
+                            });
+                        }
+                    }
+                });
             }
             _ => {
                 tracing::warn!("{} unknown command: {}", user_name, parts[0]);
