@@ -48,6 +48,15 @@ struct AppState {
     balances: Arc<Mutex<Vec<u64>>>, // Cached balances for each user
 }
 
+// Helper function to add SYSTEM messages
+fn add_system_message(messages: &Arc<Mutex<Vec<Message>>>, content: String) {
+    messages.lock().unwrap().push(Message {
+        sender: "SYSTEM".to_string(),
+        content,
+        timestamp: nostr::Timestamp::now().as_u64(),
+    });
+}
+
 // Helper functions for key persistence
 fn save_keys(name: &str, keys: &Keys) -> Result<()> {
     let keys_dir = Path::new("./keys");
@@ -926,11 +935,7 @@ impl ChatApp {
             "!invite" => {
                 if parts.len() < 2 {
                     tracing::warn!("{} !invite requires an npub", user_name);
-                    self.state.messages.lock().unwrap().push(Message {
-                        sender: "SYSTEM".to_string(),
-                        content: format!("{}: !invite requires an npub", user_name),
-                        timestamp: nostr::Timestamp::now().as_u64(),
-                    });
+                    add_system_message(&self.state.messages, format!("{}: !invite requires an npub", user_name));
                     return;
                 }
 
@@ -945,11 +950,7 @@ impl ChatApp {
                 let user_idx = user_index;
 
                 // Add initial feedback
-                messages.lock().unwrap().push(Message {
-                    sender: "SYSTEM".to_string(),
-                    content: format!("{}: Fetching KeyPackages for {}...", user_name, npub_str),
-                    timestamp: nostr::Timestamp::now().as_u64(),
-                });
+                add_system_message(&messages, format!("{}: Fetching KeyPackages for {}...", user_name, npub_str));
 
                 let npub_str = npub_str.clone(); // Clone for async block
                 tokio::spawn(async move {
@@ -958,11 +959,7 @@ impl ChatApp {
                         Ok(pk) => pk,
                         Err(e) => {
                             tracing::error!("{} failed to parse npub {}: {}", user_name_clone, npub_str, e);
-                            messages.lock().unwrap().push(Message {
-                                sender: "SYSTEM".to_string(),
-                                content: format!("{}: ❌ Invalid npub: {}", user_name_clone, e),
-                                timestamp: nostr::Timestamp::now().as_u64(),
-                            });
+                            add_system_message(&messages, format!("{}: ❌ Invalid npub: {}", user_name_clone, e));
                             return;
                         }
                     };
@@ -982,21 +979,13 @@ impl ChatApp {
                                 .unwrap();
 
                             let event_id = newest_event.id.to_hex();
-                            messages.lock().unwrap().push(Message {
-                                sender: "SYSTEM".to_string(),
-                                content: format!("{}: Found KeyPackage, adding to group...", user_name_clone),
-                                timestamp: nostr::Timestamp::now().as_u64(),
-                            });
+                            add_system_message(&messages, format!("{}: Found KeyPackage, adding to group...", user_name_clone));
 
                             // Get group_id
                             let group_id = match group_id {
                                 Some(gid) => gid,
                                 None => {
-                                    messages.lock().unwrap().push(Message {
-                                        sender: "SYSTEM".to_string(),
-                                        content: format!("{}: ❌ No active group", user_name_clone),
-                                        timestamp: nostr::Timestamp::now().as_u64(),
-                                    });
+                                    add_system_message(&messages, format!("{}: ❌ No active group", user_name_clone));
                                     return;
                                 }
                             };
@@ -1054,11 +1043,7 @@ impl ChatApp {
                                         }
                                     }
 
-                                    messages.lock().unwrap().push(Message {
-                                        sender: "SYSTEM".to_string(),
-                                        content: format!("{}: ✅ Invited {} to the group! (KeyPackage: {})", user_name_clone, npub_str, &event_id[..16]),
-                                        timestamp: nostr::Timestamp::now().as_u64(),
-                                    });
+                                    add_system_message(&messages, format!("{}: ✅ Invited {} to the group! (KeyPackage: {})", user_name_clone, npub_str, &event_id[..16]));
 
                                     // Send persistent message to group
                                     let invite_message = format!("Invited {} to the group (KeyPackage: {})", npub_str, &event_id[..16]);
@@ -1068,29 +1053,17 @@ impl ChatApp {
                                 }
                                 Err(e) => {
                                     tracing::error!("{} failed to add member: {}", user_name_clone, e);
-                                    messages.lock().unwrap().push(Message {
-                                        sender: "SYSTEM".to_string(),
-                                        content: format!("{}: ❌ Failed to add member: {}", user_name_clone, e),
-                                        timestamp: nostr::Timestamp::now().as_u64(),
-                                    });
+                                    add_system_message(&messages, format!("{}: ❌ Failed to add member: {}", user_name_clone, e));
                                 }
                             }
                         }
                         Ok(_) => {
                             tracing::warn!("{} no KeyPackages found for {}", user_name_clone, npub_str);
-                            messages.lock().unwrap().push(Message {
-                                sender: "SYSTEM".to_string(),
-                                content: format!("{}: ❌ No KeyPackages found for {}", user_name_clone, npub_str),
-                                timestamp: nostr::Timestamp::now().as_u64(),
-                            });
+                            add_system_message(&messages, format!("{}: ❌ No KeyPackages found for {}", user_name_clone, npub_str));
                         }
                         Err(e) => {
                             tracing::error!("{} failed to fetch KeyPackages: {}", user_name_clone, e);
-                            messages.lock().unwrap().push(Message {
-                                sender: "SYSTEM".to_string(),
-                                content: format!("{}: ❌ Failed to fetch KeyPackages: {}", user_name_clone, e),
-                                timestamp: nostr::Timestamp::now().as_u64(),
-                            });
+                            add_system_message(&messages, format!("{}: ❌ Failed to fetch KeyPackages: {}", user_name_clone, e));
                         }
                     }
                 });
