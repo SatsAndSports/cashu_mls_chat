@@ -39,9 +39,17 @@ The web client stores:
 Current:
 - ✓ Generate/load Nostr keys
 - ✓ Display npub
-- ✓ localStorage persistence
+- ✓ localStorage persistence for keys
+- ✓ Placeholder wallet (shows mint URL and 0 balance)
 
 Coming soon:
-- Cashu wallet integration
+- Real CDK Cashu wallet integration (needs WASM-compatible storage)
 - MLS group messaging
 - IndexedDB for wallet state
+
+## Notes
+
+The CDK wallet integration is currently a placeholder because:
+- SQLite doesn't compile to WASM (needs C stdlib)
+- Need to implement IndexedDB-backed storage for wallet proofs
+- Or use a simpler in-memory solution for the initial version

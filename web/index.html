@@ -68,9 +68,11 @@
         </div>
     </div>
 
-    <div class="card" style="display: none;">
-        <h2>Wallet</h2>
+    <div class="card" id="wallet-card" style="display: none;">
+        <h2>💰 Wallet</h2>
+        <p>Mint: <code>https://nofees.testnut.cashu.space</code></p>
         <p>Balance: <span id="balance">0</span> sats</p>
+        <div id="wallet-status">Initializing wallet...</div>
     </div>
 
     <script type="module">
@@ -79,6 +81,8 @@
             generate_keys,
             get_npub,
             clear_keys,
+            init_wallet,
+            get_balance,
             log
         } from './pkg/mdk_ecash_web.js';
 
@@ -89,12 +93,29 @@
                 wasm = await init();
                 log("WASM module loaded successfully");
                 await displayNpub();
+                await initializeWallet();
                 document.getElementById('buttons').style.display = 'block';
                 document.getElementById('status').innerHTML = '<div class="success">✓ Ready</div>';
             } catch (err) {
                 console.error('Failed to load WASM:', err);
                 document.getElementById('status').innerHTML =
                     `<div class="error">Failed to load WASM: ${err}</div>`;
+            }
+        }
+
+        async function initializeWallet() {
+            try {
+                document.getElementById('wallet-card').style.display = 'block';
+                document.getElementById('wallet-status').textContent = 'Initializing wallet...';
+
+                const balance = await init_wallet();
+                document.getElementById('balance').textContent = balance;
+                document.getElementById('wallet-status').innerHTML = '<div class="success">✓ Wallet ready</div>';
+                log("Wallet initialized with balance: " + balance);
+            } catch (err) {
+                console.error('Failed to initialize wallet:', err);
+                document.getElementById('wallet-status').innerHTML =
+                    `<div class="error">Failed to initialize wallet: ${err}</div>`;
             }
         }
 
