@@ -76,10 +76,12 @@
         <button onclick="showReceiveModal()">Receive e-cash</button>
     </div>
 
-    <div class="card" id="mdk-card" style="display: none;">
-        <h2>🔐 MDK Storage</h2>
-        <div id="mdk-status">Not initialized</div>
-        <button onclick="initMdk()">Initialize MDK</button>
+    <div class="card" id="keypackages-card" style="display: none;">
+        <h2>🔑 Key Packages</h2>
+        <div id="keypackages-status">Loading...</div>
+        <div id="keypackages-list"></div>
+        <button onclick="createKeyPackage()">Create & Broadcast New KeyPackage</button>
+        <button onclick="refreshKeyPackages()">Refresh from Nostr</button>
     </div>
 
     <!-- Receive Modal -->
@@ -105,7 +107,8 @@
             init_wallet,
             get_balance,
             receive_token,
-            init_mdk_storage,
+            create_and_broadcast_key_package,
+            fetch_my_key_packages,
             log
         } from './pkg/mdk_ecash_web.js';
 
@@ -117,9 +120,9 @@
                 log("WASM module loaded successfully");
                 await displayNpub();
                 await initializeWallet();
-                await initializeMdk();
+                await initializeKeyPackages();
                 document.getElementById('buttons').style.display = 'block';
-                document.getElementById('mdk-card').style.display = 'block';
+                document.getElementById('keypackages-card').style.display = 'block';
                 document.getElementById('status').innerHTML = '<div class="success">✓ Ready</div>';
             } catch (err) {
                 console.error('Failed to load WASM:', err);
@@ -144,17 +147,46 @@
             }
         }
 
-        async function initializeMdk() {
-            try {
-                document.getElementById('mdk-status').textContent = 'Initializing MDK storage...';
+        async function initializeKeyPackages() {
+            await refreshKeyPackages();
+        }
 
-                await init_mdk_storage();
-                document.getElementById('mdk-status').innerHTML = '<div class="success">✓ MDK storage ready</div>';
-                log("MDK storage initialized");
+        async function refreshKeyPackages() {
+            try {
+                document.getElementById('keypackages-status').textContent = 'Loading KeyPackages from Nostr...';
+
+                const packagesJson = await fetch_my_key_packages();
+                const packages = JSON.parse(packagesJson);
+
+                const listDiv = document.getElementById('keypackages-list');
+                if (packages.length === 0) {
+                    listDiv.innerHTML = '<p style="color: #666;">No KeyPackages found. Create one to get started!</p>';
+                    document.getElementById('keypackages-status').innerHTML = '<div class="success">✓ Ready (0 KeyPackages)</div>';
+                } else {
+                    listDiv.innerHTML = '<ul style="list-style: none; padding: 0;">' +
+                        packages.map(pkg => {
+                            const relayStatus = pkg.relays.map(r => {
+                                const name = r.includes('localhost') ? 'localhost:8080' : 'chaima.info';
+                                return `<span style="color: green;">✓ ${name}</span>`;
+                            }).join(', ');
+                            return `
+                            <li style="padding: 10px; background: #f5f5f5; margin: 5px 0; border-radius: 4px;">
+                                <strong>Event:</strong> ${pkg.event_id.substring(0, 16)}...<br>
+                                <strong>Created:</strong> ${new Date(pkg.created_at * 1000).toLocaleString()}<br>
+                                <strong>Content:</strong> ${pkg.content_preview}...<br>
+                                <strong>Found on:</strong> ${relayStatus || '<span style="color: red;">No relays</span>'}
+                            </li>`;
+                        }).join('') +
+                        '</ul>';
+                    document.getElementById('keypackages-status').innerHTML =
+                        `<div class="success">✓ Found ${packages.length} KeyPackage(s)</div>`;
+                }
+
+                log(`Loaded ${packages.length} KeyPackage(s)`);
             } catch (err) {
-                console.error('Failed to initialize MDK:', err);
-                document.getElementById('mdk-status').innerHTML =
-                    `<div class="error">Failed to initialize MDK: ${err}</div>`;
+                console.error('Failed to fetch KeyPackages:', err);
+                document.getElementById('keypackages-status').innerHTML =
+                    `<div class="error">Failed to load: ${err}</div>`;
             }
         }
 
@@ -235,19 +267,23 @@
             }
         };
 
-        window.initMdk = async function() {
-            const statusDiv = document.getElementById('mdk-status');
-            statusDiv.innerHTML = 'Initializing MDK storage...';
+        window.createKeyPackage = async function() {
+            const statusDiv = document.getElementById('keypackages-status');
+            statusDiv.innerHTML = 'Creating and broadcasting KeyPackage...';
 
             try {
-                await init_mdk_storage();
-                statusDiv.innerHTML = '<div class="success">✅ MDK storage initialized and persisted!</div>';
-                log('MDK storage ready. Check localStorage for mdk_state');
+                const eventId = await create_and_broadcast_key_package();
+                log(`KeyPackage created with event ID: ${eventId}`);
+
+                // Refresh the list
+                await refreshKeyPackages();
             } catch (err) {
-                console.error('Failed to initialize MDK:', err);
-                statusDiv.innerHTML = `<div class="error">Failed to initialize: ${err}</div>`;
+                console.error('Failed to create KeyPackage:', err);
+                statusDiv.innerHTML = `<div class="error">Failed to create: ${err}</div>`;
             }
         };
+
+        window.refreshKeyPackages = refreshKeyPackages;
 
         // Load WASM on page load
         loadWasm();

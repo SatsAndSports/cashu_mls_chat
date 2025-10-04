@@ -1,9 +1,11 @@
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::future_to_promise;
-use nostr::{Keys, ToBech32};
+use nostr::{Keys, ToBech32, EventBuilder, Kind, RelayUrl};
+use nostr_sdk::Client;
 use web_sys::{window, Storage};
 use std::sync::Arc;
 use std::str::FromStr;
+use std::time::Duration;
 
 mod wallet_db;
 use wallet_db::HybridWalletDatabase;
@@ -14,6 +16,31 @@ use mdk_storage::MdkHybridStorage;
 use cdk::wallet::{Wallet, WalletBuilder, ReceiveOptions};
 use cdk::nuts::{CurrencyUnit, Token};
 use cdk::mint_url::MintUrl;
+
+use mdk_core::MDK;
+
+// Relay URLs
+const RELAYS: &[&str] = &[
+    "ws://localhost:8080",
+    "wss://nostr.chaima.info",
+];
+
+/// Helper function to create MDK instance
+async fn create_mdk() -> Result<MDK<MdkHybridStorage>, JsValue> {
+    let storage = MdkHybridStorage::new().await?;
+    Ok(MDK::new(storage))
+}
+
+/// Helper function to get Nostr keys
+fn get_keys() -> Result<Keys, JsValue> {
+    let storage = get_local_storage()?;
+    let secret_hex = storage
+        .get_item("nostr_secret_key")?
+        .ok_or_else(|| JsValue::from_str("No keys found in localStorage"))?;
+
+    Keys::parse(&secret_hex)
+        .map_err(|e| JsValue::from_str(&format!("Failed to parse keys: {}", e)))
+}
 
 /// Helper function to create a wallet from stored keys and database
 async fn create_wallet() -> Result<Wallet, JsValue> {
@@ -211,23 +238,138 @@ pub fn receive_token(token_str: String) -> js_sys::Promise {
     })
 }
 
-/// Initialize MDK storage for testing persistence
-/// Returns a Promise that resolves when storage is initialized
+/// Create and broadcast a new KeyPackage to Nostr relays
+/// Returns a Promise that resolves to the event ID
 #[wasm_bindgen]
-pub fn init_mdk_storage() -> js_sys::Promise {
+pub fn create_and_broadcast_key_package() -> js_sys::Promise {
     future_to_promise(async move {
         let result = async {
-            log("Initializing MDK storage...");
+            log("Creating KeyPackage...");
 
-            // Create MDK storage (loads from localStorage if it exists)
-            let _storage = MdkHybridStorage::new().await?;
+            // Get keys and create MDK
+            let keys = get_keys()?;
+            let mdk = create_mdk().await?;
 
-            log("✅ MDK storage initialized!");
+            // Create KeyPackage for event
+            let relay_urls: Vec<RelayUrl> = RELAYS
+                .iter()
+                .filter_map(|r| RelayUrl::parse(r).ok())
+                .collect();
 
-            Ok::<(), JsValue>(())
+            let (key_package_hex, tags) = mdk
+                .create_key_package_for_event(&keys.public_key(), relay_urls)
+                .map_err(|e| JsValue::from_str(&format!("Failed to create KeyPackage: {}", e)))?;
+
+            log(&format!("KeyPackage created: {}...", &key_package_hex[..20.min(key_package_hex.len())]));
+
+            // Build and sign event (kind 443)
+            let event = EventBuilder::new(Kind::Custom(443), key_package_hex)
+                .tags(tags.to_vec())
+                .sign_with_keys(&keys)
+                .map_err(|e| JsValue::from_str(&format!("Failed to sign event: {}", e)))?;
+
+            let event_id = event.id.to_hex();
+            log(&format!("Event signed: {}", event_id));
+
+            // Create client and publish to relays
+            let client = Client::default();
+            for relay in RELAYS {
+                if let Ok(url) = RelayUrl::parse(relay) {
+                    let _ = client.add_relay(url).await;
+                }
+            }
+            client.connect().await;
+
+            log("Publishing to relays...");
+            client.send_event(&event).await
+                .map_err(|e| JsValue::from_str(&format!("Failed to publish: {}", e)))?;
+
+            log(&format!("✅ KeyPackage published! Event ID: {}", event_id));
+
+            Ok::<String, JsValue>(event_id)
         }
         .await;
 
-        result.map(|_| JsValue::UNDEFINED)
+        result.map(|event_id| JsValue::from_str(&event_id))
+    })
+}
+
+/// Fetch KeyPackages from Nostr relays
+/// Returns a Promise that resolves to a JSON array of KeyPackage info with relay sources
+#[wasm_bindgen]
+pub fn fetch_my_key_packages() -> js_sys::Promise {
+    future_to_promise(async move {
+        let result = async {
+            log("Fetching KeyPackages from Nostr...");
+
+            // Get our public key
+            let keys = get_keys()?;
+            let pubkey = keys.public_key();
+
+            // Build filter for kind 443 events authored by us
+            let filter = nostr::Filter::new()
+                .kind(Kind::Custom(443))
+                .author(pubkey);
+
+            // Query each relay individually and track sources
+            use std::collections::HashMap;
+            let mut event_relays: HashMap<String, Vec<String>> = HashMap::new();
+            let mut all_events: HashMap<String, nostr::Event> = HashMap::new();
+
+            for relay_url in RELAYS {
+                log(&format!("Querying {}...", relay_url));
+
+                let client = Client::default();
+                if let Ok(url) = RelayUrl::parse(relay_url) {
+                    let _ = client.add_relay(url).await;
+                    client.connect().await;
+
+                    match client.fetch_events(filter.clone(), Duration::from_secs(5)).await {
+                        Ok(events) => {
+                            log(&format!("  Found {} event(s) on {}", events.len(), relay_url));
+                            for event in events {
+                                let event_id = event.id.to_hex();
+
+                                // Track which relay has this event
+                                event_relays.entry(event_id.clone())
+                                    .or_insert_with(Vec::new)
+                                    .push(relay_url.to_string());
+
+                                // Store event (only once)
+                                all_events.entry(event_id)
+                                    .or_insert(event);
+                            }
+                        }
+                        Err(e) => {
+                            log(&format!("  Error querying {}: {}", relay_url, e));
+                        }
+                    }
+
+                    // Disconnect from this relay
+                    let _ = client.disconnect().await;
+                }
+            }
+
+            log(&format!("Found {} unique KeyPackage(s)", all_events.len()));
+
+            // Convert to JSON array with relay info
+            let packages: Vec<_> = all_events.iter().map(|(event_id, event)| {
+                let relays = event_relays.get(event_id).cloned().unwrap_or_default();
+                serde_json::json!({
+                    "event_id": event.id.to_hex(),
+                    "created_at": event.created_at.as_u64(),
+                    "content_preview": &event.content[..20.min(event.content.len())],
+                    "relays": relays,
+                })
+            }).collect();
+
+            let json = serde_json::to_string(&packages)
+                .map_err(|e| JsValue::from_str(&format!("Failed to serialize: {}", e)))?;
+
+            Ok::<String, JsValue>(json)
+        }
+        .await;
+
+        result.map(|json| JsValue::from_str(&json))
     })
 }

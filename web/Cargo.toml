@@ -26,6 +26,7 @@ web-sys = { version = "0.3", features = [
 
 # Nostr
 nostr = { version = "0.43", default-features = false, features = ["std"] }
+nostr-sdk = { version = "0.43", default-features = false, features = ["nip44"] }
 
 # CDK - Cashu wallet
 cdk = { path = "../cdk/crates/cdk", default-features = false, features = ["wallet"] }
