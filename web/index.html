@@ -73,6 +73,21 @@
         <p>Mint: <code>https://nofees.testnut.cashu.space</code></p>
         <p>Balance: <span id="balance">0</span> sats</p>
         <div id="wallet-status">Initializing wallet...</div>
+        <button onclick="showReceiveModal()">Receive e-cash</button>
+    </div>
+
+    <!-- Receive Modal -->
+    <div id="receive-modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000;">
+        <div style="background: white; max-width: 600px; margin: 50px auto; padding: 20px; border-radius: 8px;">
+            <h2>Receive e-cash Token</h2>
+            <p>Paste your Cashu token below:</p>
+            <textarea id="token-input" rows="6" style="width: 100%; font-family: monospace; padding: 10px; border: 1px solid #ddd; border-radius: 4px;"></textarea>
+            <div style="margin-top: 10px;">
+                <button onclick="receiveToken()">Receive</button>
+                <button onclick="hideReceiveModal()">Cancel</button>
+            </div>
+            <div id="receive-status" style="margin-top: 10px;"></div>
+        </div>
     </div>
 
     <script type="module">
@@ -83,6 +98,7 @@
             clear_keys,
             init_wallet,
             get_balance,
+            receive_token,
             log
         } from './pkg/mdk_ecash_web.js';
 
@@ -154,6 +170,45 @@
                     console.error('Failed to clear keys:', err);
                     alert('Failed to clear keys: ' + err);
                 }
+            }
+        };
+
+        window.showReceiveModal = function() {
+            document.getElementById('receive-modal').style.display = 'block';
+            document.getElementById('token-input').value = '';
+            document.getElementById('receive-status').innerHTML = '';
+        };
+
+        window.hideReceiveModal = function() {
+            document.getElementById('receive-modal').style.display = 'none';
+        };
+
+        window.receiveToken = async function() {
+            const tokenInput = document.getElementById('token-input').value.trim();
+            const statusDiv = document.getElementById('receive-status');
+
+            if (!tokenInput) {
+                statusDiv.innerHTML = '<div class="error">Please paste a token</div>';
+                return;
+            }
+
+            statusDiv.innerHTML = 'Receiving token...';
+
+            try {
+                const amount = await receive_token(tokenInput);
+                statusDiv.innerHTML = `<div class="success">✅ Received ${amount} sats!</div>`;
+
+                // Update balance display
+                const newBalance = await get_balance();
+                document.getElementById('balance').textContent = newBalance;
+
+                // Close modal after 2 seconds
+                setTimeout(() => {
+                    hideReceiveModal();
+                }, 2000);
+            } catch (err) {
+                console.error('Failed to receive token:', err);
+                statusDiv.innerHTML = `<div class="error">Failed to receive: ${err}</div>`;
             }
         };
 

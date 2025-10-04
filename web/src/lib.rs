@@ -8,8 +8,8 @@ use std::str::FromStr;
 mod wallet_db;
 use wallet_db::HybridWalletDatabase;
 
-use cdk::wallet::{Wallet, WalletBuilder};
-use cdk::nuts::CurrencyUnit;
+use cdk::wallet::{Wallet, WalletBuilder, ReceiveOptions};
+use cdk::nuts::{CurrencyUnit, Token};
 use cdk::mint_url::MintUrl;
 
 /// Helper function to create a wallet from stored keys and database
@@ -172,5 +172,38 @@ pub fn get_balance() -> js_sys::Promise {
         .await;
 
         result.map(|b| JsValue::from_f64(b as f64))
+    })
+}
+
+/// Receive ecash token
+/// Returns a Promise that resolves to the amount received
+#[wasm_bindgen]
+pub fn receive_token(token_str: String) -> js_sys::Promise {
+    future_to_promise(async move {
+        let result = async {
+            log(&format!("Receiving token: {}", &token_str[..20.min(token_str.len())]));
+
+            // Parse token to validate it
+            let _token = Token::from_str(&token_str)
+                .map_err(|e| JsValue::from_str(&format!("Invalid token: {}", e)))?;
+
+            log(&format!("Token parsed, attempting to receive..."));
+
+            // Create wallet (loads from localStorage)
+            let wallet = create_wallet().await?;
+
+            // Receive the token
+            let amount = wallet
+                .receive(&token_str, ReceiveOptions::default())
+                .await
+                .map_err(|e| JsValue::from_str(&format!("Failed to receive token: {}", e)))?;
+
+            log(&format!("✅ Received {} sats!", amount));
+
+            Ok::<u64, JsValue>(u64::from(amount))
+        }
+        .await;
+
+        result.map(|amount| JsValue::from_f64(amount as f64))
     })
 }
