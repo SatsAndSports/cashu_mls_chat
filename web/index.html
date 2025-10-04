@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MDK Ecash Web Client</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+        }
+        .card {
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+        }
+        .npub {
+            font-family: monospace;
+            background: #f5f5f5;
+            padding: 10px;
+            border-radius: 4px;
+            word-break: break-all;
+        }
+        button {
+            background: #0066cc;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover {
+            background: #0052a3;
+        }
+        .error {
+            color: red;
+            padding: 10px;
+            background: #ffe6e6;
+            border-radius: 4px;
+            margin: 10px 0;
+        }
+        .success {
+            color: green;
+            padding: 10px;
+            background: #e6ffe6;
+            border-radius: 4px;
+            margin: 10px 0;
+        }
+    </style>
+</head>
+<body>
+    <h1>🔐 MDK Ecash Web Client</h1>
+
+    <div class="card">
+        <h2>Nostr Identity</h2>
+        <div id="status">Loading WASM module...</div>
+        <div id="npub-container" style="display: none;">
+            <p><strong>Your npub:</strong></p>
+            <div class="npub" id="npub"></div>
+        </div>
+        <div id="buttons" style="display: none;">
+            <button onclick="newKeys()">Generate New Keys</button>
+            <button onclick="clearKeys()">Clear Keys</button>
+        </div>
+    </div>
+
+    <div class="card" style="display: none;">
+        <h2>Wallet</h2>
+        <p>Balance: <span id="balance">0</span> sats</p>
+    </div>
+
+    <script type="module">
+        import init, {
+            get_or_create_keys,
+            generate_keys,
+            get_npub,
+            clear_keys,
+            log
+        } from './pkg/mdk_ecash_web.js';
+
+        let wasm;
+
+        async function loadWasm() {
+            try {
+                wasm = await init();
+                log("WASM module loaded successfully");
+                await displayNpub();
+                document.getElementById('buttons').style.display = 'block';
+                document.getElementById('status').innerHTML = '<div class="success">✓ Ready</div>';
+            } catch (err) {
+                console.error('Failed to load WASM:', err);
+                document.getElementById('status').innerHTML =
+                    `<div class="error">Failed to load WASM: ${err}</div>`;
+            }
+        }
+
+        async function displayNpub() {
+            try {
+                const npub = get_or_create_keys();
+                document.getElementById('npub').textContent = npub;
+                document.getElementById('npub-container').style.display = 'block';
+            } catch (err) {
+                console.error('Failed to get npub:', err);
+                document.getElementById('status').innerHTML =
+                    `<div class="error">Failed to get keys: ${err}</div>`;
+            }
+        }
+
+        window.newKeys = async function() {
+            try {
+                const npub = generate_keys();
+                document.getElementById('npub').textContent = npub;
+                log("New keys generated: " + npub);
+                alert('New keys generated! Previous keys are overwritten.');
+            } catch (err) {
+                console.error('Failed to generate keys:', err);
+                alert('Failed to generate keys: ' + err);
+            }
+        };
+
+        window.clearKeys = async function() {
+            if (confirm('Are you sure you want to clear your keys? This cannot be undone!')) {
+                try {
+                    clear_keys();
+                    document.getElementById('npub-container').style.display = 'none';
+                    document.getElementById('status').innerHTML =
+                        '<div class="success">Keys cleared. Reload page to generate new keys.</div>';
+                } catch (err) {
+                    console.error('Failed to clear keys:', err);
+                    alert('Failed to clear keys: ' + err);
+                }
+            }
+        };
+
+        // Load WASM on page load
+        loadWasm();
+    </script>
+</body>
+</html>
