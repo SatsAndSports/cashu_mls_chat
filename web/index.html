@@ -257,6 +257,9 @@
                 const packagesJson = await fetch_my_key_packages();
                 const packages = JSON.parse(packagesJson);
 
+                // Sort by created_at timestamp, newest first
+                packages.sort((a, b) => b.created_at - a.created_at);
+
                 const listDiv = document.getElementById('keypackages-list');
                 if (packages.length === 0) {
                     listDiv.innerHTML = '<p style="color: #666;">No KeyPackages found. Create one to get started!</p>';
