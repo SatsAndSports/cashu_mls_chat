@@ -941,6 +941,8 @@ impl ChatApp {
                 let group_id = self.state.users[user_index].mls_group_id.clone();
                 let keys = self.state.users[user_index].keys.clone();
                 let messages = self.state.messages.clone();
+                let state = self.state.clone();
+                let user_idx = user_index;
 
                 // Add initial feedback
                 messages.lock().unwrap().push(Message {
@@ -979,6 +981,7 @@ impl ChatApp {
                                 .max_by_key(|e| e.created_at)
                                 .unwrap();
 
+                            let event_id = newest_event.id.to_hex();
                             messages.lock().unwrap().push(Message {
                                 sender: "SYSTEM".to_string(),
                                 content: format!("{}: Found KeyPackage, adding to group...", user_name_clone),
@@ -1000,8 +1003,19 @@ impl ChatApp {
 
                             // Add member to group
                             let result = {
-                                let mdk_guard = mdk.lock().unwrap();
-                                mdk_guard.add_members(&group_id, &[newest_event])
+                                let mut mdk_guard = mdk.lock().unwrap();
+                                let add_result = mdk_guard.add_members(&group_id, &[newest_event]);
+
+                                // Merge pending commit to finalize the state change
+                                if add_result.is_ok() {
+                                    if let Err(e) = mdk_guard.merge_pending_commit(&group_id) {
+                                        tracing::error!("{} failed to merge pending commit: {}", user_name_clone, e);
+                                    } else {
+                                        tracing::info!("{} merged pending commit", user_name_clone);
+                                    }
+                                }
+
+                                add_result
                             }; // mdk_guard is dropped here before any await
 
                             match result {
@@ -1042,9 +1056,15 @@ impl ChatApp {
 
                                     messages.lock().unwrap().push(Message {
                                         sender: "SYSTEM".to_string(),
-                                        content: format!("{}: ✅ Invited {} to the group!", user_name_clone, npub_str),
+                                        content: format!("{}: ✅ Invited {} to the group! (KeyPackage: {})", user_name_clone, npub_str, &event_id[..16]),
                                         timestamp: nostr::Timestamp::now().as_u64(),
                                     });
+
+                                    // Send persistent message to group
+                                    let invite_message = format!("Invited {} to the group (KeyPackage: {})", npub_str, &event_id[..16]);
+                                    if let Err(e) = state.send_message(user_idx, invite_message).await {
+                                        tracing::error!("{} failed to send invite notification message: {}", user_name_clone, e);
+                                    }
                                 }
                                 Err(e) => {
                                     tracing::error!("{} failed to add member: {}", user_name_clone, e);
