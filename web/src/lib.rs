@@ -8,9 +8,43 @@ use std::str::FromStr;
 mod wallet_db;
 use wallet_db::HybridWalletDatabase;
 
-use cdk::wallet::WalletBuilder;
+use cdk::wallet::{Wallet, WalletBuilder};
 use cdk::nuts::CurrencyUnit;
 use cdk::mint_url::MintUrl;
+
+/// Helper function to create a wallet from stored keys and database
+async fn create_wallet() -> Result<Wallet, JsValue> {
+    // Get Nostr keys from localStorage
+    let storage = get_local_storage()?;
+    let secret_hex = storage
+        .get_item("nostr_secret_key")?
+        .ok_or_else(|| JsValue::from_str("No keys found in localStorage"))?;
+
+    let keys = Keys::parse(&secret_hex)
+        .map_err(|e| JsValue::from_str(&format!("Failed to parse keys: {}", e)))?;
+
+    // Create seed from Nostr secret key
+    let mut seed = [0u8; 64];
+    seed[..32].copy_from_slice(keys.secret_key().as_secret_bytes());
+
+    // Create mint URL
+    let mint_url = MintUrl::from_str("https://nofees.testnut.cashu.space")
+        .map_err(|e| JsValue::from_str(&format!("Invalid mint URL: {}", e)))?;
+
+    // Create hybrid database (loads from localStorage)
+    let db = HybridWalletDatabase::new().await?;
+
+    // Build wallet
+    let wallet = WalletBuilder::new()
+        .mint_url(mint_url)
+        .unit(CurrencyUnit::Sat)
+        .localstore(Arc::new(db))
+        .seed(seed)
+        .build()
+        .map_err(|e| JsValue::from_str(&format!("Failed to build wallet: {}", e)))?;
+
+    Ok(wallet)
+}
 
 // Helper to get localStorage
 fn get_local_storage() -> Result<Storage, JsValue> {
@@ -93,38 +127,8 @@ pub fn init_wallet() -> js_sys::Promise {
         let result = async {
             log("Initializing CDK wallet with hybrid storage...");
 
-            // Get Nostr keys from localStorage
-            let storage = get_local_storage()?;
-            let secret_hex = storage
-                .get_item("nostr_secret_key")?
-                .ok_or_else(|| JsValue::from_str("No keys found in localStorage"))?;
-
-            let keys = Keys::parse(&secret_hex)
-                .map_err(|e| JsValue::from_str(&format!("Failed to parse keys: {}", e)))?;
-
-            // Create seed from Nostr secret key
-            let mut seed = [0u8; 64];
-            seed[..32].copy_from_slice(keys.secret_key().as_secret_bytes());
-
-            // Create mint URL
-            let mint_url = MintUrl::from_str("https://nofees.testnut.cashu.space")
-                .map_err(|e| JsValue::from_str(&format!("Invalid mint URL: {}", e)))?;
-
-            log("Creating hybrid wallet database...");
-
-            // Create hybrid database (in-memory + localStorage snapshots)
-            let db = HybridWalletDatabase::new().await?;
-
-            log("Building CDK wallet...");
-
-            // Build wallet
-            let wallet = WalletBuilder::new()
-                .mint_url(mint_url)
-                .unit(CurrencyUnit::Sat)
-                .localstore(Arc::new(db))
-                .seed(seed)
-                .build()
-                .map_err(|e| JsValue::from_str(&format!("Failed to build wallet: {}", e)))?;
+            // Create wallet
+            let wallet = create_wallet().await?;
 
             log("Fetching wallet balance...");
 
@@ -144,13 +148,29 @@ pub fn init_wallet() -> js_sys::Promise {
     })
 }
 
-/// Get wallet balance
+/// Get wallet balance (recreates wallet from localStorage each time)
 /// Returns a Promise that resolves to the current balance
 #[wasm_bindgen]
 pub fn get_balance() -> js_sys::Promise {
     future_to_promise(async move {
-        // For now, just return 0 since we need to store the wallet instance
-        // This will be improved later when we add proper wallet state management
-        Ok(JsValue::from_f64(0.0))
+        let result = async {
+            log("Fetching balance from wallet...");
+
+            // Create wallet (loads from localStorage)
+            let wallet = create_wallet().await?;
+
+            // Get balance
+            let balance = wallet
+                .total_balance()
+                .await
+                .map_err(|e| JsValue::from_str(&format!("Failed to get balance: {}", e)))?;
+
+            log(&format!("Balance: {} sats", balance));
+
+            Ok::<u64, JsValue>(u64::from(balance))
+        }
+        .await;
+
+        result.map(|b| JsValue::from_f64(b as f64))
     })
 }
