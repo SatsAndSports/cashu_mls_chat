@@ -166,8 +166,7 @@
                     listDiv.innerHTML = '<ul style="list-style: none; padding: 0;">' +
                         packages.map(pkg => {
                             const relayStatus = pkg.relays.map(r => {
-                                const name = r.includes('localhost') ? 'localhost:8080' : 'chaima.info';
-                                return `<span style="color: green;">✓ ${name}</span>`;
+                                return `<span style="color: green;">✓ ${r}</span>`;
                             }).join(', ');
                             return `
                             <li style="padding: 10px; background: #f5f5f5; margin: 5px 0; border-radius: 4px;">
