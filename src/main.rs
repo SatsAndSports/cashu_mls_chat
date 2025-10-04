@@ -86,7 +86,7 @@ impl AppState {
             RelayUrl::parse("wss://nostr.bitcoiner.social")?,
             RelayUrl::parse("wss://nostr.land")?,
             RelayUrl::parse("wss://relay.primal.net")?, // WORKED
-            RelayUrl::parse("wss://nostr.wine")?,
+            //RelayUrl::parse("wss://nostr.wine")?,
             //RelayUrl::parse("wss://nostr.mom")?,// pow28
             RelayUrl::parse("wss://nostr.strits.dk")?,
             //RelayUrl::parse("wss://relay.mostr.pub")?,
@@ -99,7 +99,7 @@ impl AppState {
             RelayUrl::parse("wss://vitor.nostr1.com")?,
             RelayUrl::parse("wss://nostr.chaima.info")?, // WORKED
                                                          //
-            RelayUrl::parse("wss://premium.primal.net")?,
+            //RelayUrl::parse("wss://premium.primal.net")?,
             RelayUrl::parse("wss://theforest.nostr1.com")?,
             RelayUrl::parse("wss://articles.layer3.news")?,
             RelayUrl::parse("wss://nostr-01.yakihonne.com")?,
@@ -111,7 +111,7 @@ impl AppState {
             RelayUrl::parse("wss://relay.jeffg.fyi")?,
 
             //RelayUrl::parse("wss://relay.0xchat.com")?,//forbidden
-            RelayUrl::parse("wss://relay.benthecarman.com")?,
+            //RelayUrl::parse("wss://relay.benthecarman.com")?,
             //RelayUrl::parse("wss://yabu.me")?,
         ];
 
