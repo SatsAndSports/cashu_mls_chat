@@ -496,8 +496,7 @@
                 // Clear input
                 input.value = '';
 
-                // Reload messages to show our sent message
-                await loadMessages(currentChatGroupId);
+                // Message will appear via subscription when relay broadcasts it back
             } catch (err) {
                 console.error('❌ Failed to send message:', err);
                 alert(`Failed to send message: ${err}`);
