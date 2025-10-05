@@ -90,7 +90,7 @@ impl AppState {
     async fn new() -> Result<Self> {
         // Use local relay + public relays
         let relay_urls = vec![
-            //RelayUrl::parse("ws://localhost:8080")?,
+            RelayUrl::parse("ws://localhost:8080")?,
             //RelayUrl::parse("wss://relay.damus.io")?,
             //RelayUrl::parse("wss://nos.lol")?, // 28 bits needed
             RelayUrl::parse("wss://relay.nostr.band")?,
