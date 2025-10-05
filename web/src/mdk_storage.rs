@@ -24,6 +24,7 @@ struct SerializableState {
     messages_by_group: HashMap<String, Vec<Message>>,  // GroupId as hex string
     processed_messages: HashMap<String, ProcessedMessage>,  // EventId as hex string
     group_exporter_secrets: HashMap<String, GroupExporterSecret>,  // (GroupId, u64) as "hex:epoch"
+    created_key_package_event_ids: Vec<String>,  // EventId as hex string - tracks which KeyPackages we created
 }
 
 #[derive(Debug, Clone, Default)]
@@ -37,6 +38,7 @@ struct MdkState {
     messages_by_group: HashMap<GroupId, Vec<Message>>,
     processed_messages: HashMap<EventId, ProcessedMessage>,
     group_exporter_secrets: HashMap<(GroupId, u64), GroupExporterSecret>,
+    created_key_package_event_ids: Vec<EventId>,  // Tracks which KeyPackages we created in this session
 }
 
 impl MdkState {
@@ -68,6 +70,9 @@ impl MdkState {
                 .collect(),
             group_exporter_secrets: self.group_exporter_secrets.iter()
                 .map(|((gid, epoch), v)| (format!("{}:{}", hex::encode(gid.as_slice()), epoch), v.clone()))
+                .collect(),
+            created_key_package_event_ids: self.created_key_package_event_ids.iter()
+                .map(|id| id.to_hex())
                 .collect(),
         }
     }
@@ -135,6 +140,9 @@ impl MdkState {
                     Ok(((gid, epoch), v))
                 })
                 .collect::<Result<_, String>>()?,
+            created_key_package_event_ids: s.created_key_package_event_ids.into_iter()
+                .map(|hex_id| EventId::from_hex(&hex_id).map_err(|e| e.to_string()))
+                .collect::<Result<_, String>>()?,
         })
     }
 }
@@ -146,6 +154,23 @@ pub struct MdkHybridStorage {
 }
 
 impl MdkHybridStorage {
+    /// Mark a KeyPackage as created in this session
+    pub fn mark_key_package_created(&self, event_id: EventId) -> Result<(), JsValue> {
+        self.state.lock().unwrap().created_key_package_event_ids.push(event_id);
+        self.save_snapshot()
+    }
+
+    /// Check if we have the private keys for a given KeyPackage
+    /// Returns true only if the KeyPackage was created in the current browser session
+    pub fn has_key_package_keys(&self, event_id: &EventId) -> bool {
+        self.state.lock().unwrap().created_key_package_event_ids.contains(event_id)
+    }
+
+    /// Get all KeyPackage event IDs we have keys for
+    pub fn get_key_package_event_ids_with_keys(&self) -> Vec<EventId> {
+        self.state.lock().unwrap().created_key_package_event_ids.clone()
+    }
+
     pub async fn new() -> Result<Self, JsValue> {
         // Try to load from localStorage
         let state = match Self::load_from_localstorage().await {

@@ -151,6 +151,7 @@
                 <h2>🔑 Key Packages</h2>
                 <div id="keypackages-status">Loading...</div>
                 <div id="keypackages-list"></div>
+                <button onclick="createKeyPackageAndWait()">🚀 Create KeyPackage & Wait for Invite</button>
                 <button onclick="createKeyPackage()">Create & Broadcast New KeyPackage</button>
                 <button onclick="refreshKeyPackages()">Refresh from Nostr</button>
             </div>
@@ -180,6 +181,27 @@
         </div>
     </div>
 
+    <!-- Wait for Invite Modal -->
+    <div id="wait-invite-modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000;">
+        <div style="background: white; max-width: 600px; margin: 50px auto; padding: 30px; border-radius: 8px; text-align: center;">
+            <h2>⏳ Waiting for Group Invite</h2>
+            <p style="margin: 20px 0;">Your KeyPackage has been published!</p>
+            <div class="npub" id="wait-npub" style="margin: 20px 0;"></div>
+            <p style="color: #666; margin: 20px 0;">Waiting for someone to invite you to a group...</p>
+            <div id="wait-status" style="margin: 20px 0; font-weight: bold; color: #0066cc;"></div>
+            <div style="margin-top: 20px;">
+                <div style="display: inline-block; width: 40px; height: 40px; border: 4px solid #f3f3f3; border-top: 4px solid #0066cc; border-radius: 50%; animation: spin 1s linear infinite;"></div>
+            </div>
+        </div>
+    </div>
+
+    <style>
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+
     <script type="module">
         import init, {
             get_or_create_keys,
@@ -194,6 +216,7 @@
             get_groups,
             fetch_welcome_events,
             process_pending_welcomes,
+            create_keypackage_and_wait_for_invite,
             log
         } from './pkg/mdk_ecash_web.js';
 
@@ -452,6 +475,35 @@
         };
 
         window.refreshKeyPackages = refreshKeyPackages;
+
+        window.createKeyPackageAndWait = async function() {
+            try {
+                // Show modal
+                document.getElementById('wait-invite-modal').style.display = 'block';
+                document.getElementById('wait-npub').textContent = get_npub();
+                document.getElementById('wait-status').textContent = 'Creating KeyPackage...';
+
+                // Call the WASM function (it will poll and wait)
+                const groupName = await create_keypackage_and_wait_for_invite();
+
+                // Success!
+                document.getElementById('wait-status').innerHTML = `<div class="success">✅ Joined group: ${groupName}</div>`;
+
+                // Wait 2 seconds then close modal and refresh groups
+                setTimeout(async () => {
+                    document.getElementById('wait-invite-modal').style.display = 'none';
+                    await refreshGroups();
+                    // Switch to groups tab
+                    showSection('groups');
+                }, 2000);
+            } catch (err) {
+                console.error('Failed to join group:', err);
+                document.getElementById('wait-status').innerHTML = `<div class="error">Failed: ${err}</div>`;
+                setTimeout(() => {
+                    document.getElementById('wait-invite-modal').style.display = 'none';
+                }, 3000);
+            }
+        };
 
         // Load WASM on page load
         loadWasm();

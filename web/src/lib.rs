@@ -22,8 +22,6 @@ use mdk_core::MDK;
 // Relay URLs
 const RELAYS: &[&str] = &[
     "ws://localhost:8080",
-    "wss://nostr.chaima.info",
-    "wss://orangesync.tech",
 ];
 
 /// Helper function to create MDK instance
@@ -93,12 +91,19 @@ pub fn init() {
 }
 
 /// Generate new Nostr keys and save to localStorage
+/// Also clears MDK state since it's associated with the old identity (keeps wallet)
 #[wasm_bindgen]
 pub fn generate_keys() -> Result<String, JsValue> {
     let keys = Keys::generate();
     let secret_hex = keys.secret_key().to_secret_hex();
 
     let storage = get_local_storage()?;
+
+    // Clear MDK state from previous identity (but keep wallet)
+    storage.remove_item("mdk_state")?;
+    log("Cleared old MDK state for fresh start (wallet preserved)");
+
+    // Save new keys
     storage.set_item("nostr_secret_key", &secret_hex)?;
 
     Ok(keys.public_key().to_bech32().expect("bech32 encoding is infallible"))
@@ -135,11 +140,13 @@ pub fn get_npub() -> Result<String, JsValue> {
     Ok(keys.public_key().to_bech32().expect("bech32 encoding is infallible"))
 }
 
-/// Clear all stored keys (for testing)
+/// Clear all stored keys and MDK state (for testing, keeps wallet)
 #[wasm_bindgen]
 pub fn clear_keys() -> Result<(), JsValue> {
     let storage = get_local_storage()?;
     storage.remove_item("nostr_secret_key")?;
+    storage.remove_item("mdk_state")?;
+    log("Cleared Nostr keys and MDK state (wallet preserved)");
     Ok(())
 }
 
@@ -286,6 +293,11 @@ pub fn create_and_broadcast_key_package() -> js_sys::Promise {
 
             log(&format!("✅ KeyPackage published! Event ID: {}", event_id));
 
+            // Mark this KeyPackage as created (so we know we have the private keys)
+            let storage = MdkHybridStorage::new().await?;
+            storage.mark_key_package_created(event.id)?;
+            log("  Marked KeyPackage as created in this session");
+
             Ok::<String, JsValue>(event_id)
         }
         .await;
@@ -352,7 +364,7 @@ pub fn fetch_welcome_events() -> js_sys::Promise {
             }
             client.connect().await;
 
-            // Step 1: Get our KeyPackage event IDs
+            // Step 1: Get our KeyPackage event IDs that we have private keys for
             log("Finding our KeyPackage events...");
             let kp_filter = nostr::Filter::new()
                 .kind(Kind::Custom(443))
@@ -361,8 +373,23 @@ pub fn fetch_welcome_events() -> js_sys::Promise {
             let kp_events = client.fetch_events(kp_filter, Duration::from_secs(5)).await
                 .map_err(|e| JsValue::from_str(&format!("Failed to fetch KeyPackages: {}", e)))?;
 
-            let kp_event_ids: Vec<String> = kp_events.iter().map(|e| e.id.to_hex()).collect();
-            log(&format!("Found {} KeyPackage(s): {:?}", kp_event_ids.len(), kp_event_ids));
+            let all_kp_event_ids: Vec<String> = kp_events.iter().map(|e| e.id.to_hex()).collect();
+            log(&format!("Found {} KeyPackage(s) on relays: {:?}", all_kp_event_ids.len(), all_kp_event_ids));
+
+            // Filter to only KeyPackages we have private keys for (created in this session)
+            let storage = MdkHybridStorage::new().await?;
+            let kp_with_keys = storage.get_key_package_event_ids_with_keys();
+            let kp_event_ids: Vec<String> = kp_events.iter()
+                .filter(|e| kp_with_keys.contains(&e.id))
+                .map(|e| e.id.to_hex())
+                .collect();
+
+            log(&format!("Found {} KeyPackage(s) with private keys: {:?}", kp_event_ids.len(), kp_event_ids));
+
+            if kp_event_ids.is_empty() {
+                log("⚠️ No KeyPackages with private keys found. Create a new KeyPackage to receive invites.");
+                return Ok::<u32, JsValue>(0);
+            }
 
             // Step 2: Get Welcome events that reference our KeyPackages
             log("Querying relays for Welcome events...");
@@ -399,6 +426,31 @@ pub fn fetch_welcome_events() -> js_sys::Promise {
 
             for event in events {
                 log(&format!("Processing Welcome event: {}", event.id.to_hex()));
+
+                // Log which KeyPackage this Welcome references
+                let referenced_kp: Vec<String> = event.tags.iter()
+                    .filter(|tag| tag.kind().as_str() == "e")
+                    .filter_map(|tag| tag.content().map(|s| s.to_string()))
+                    .collect();
+                log(&format!("  References KeyPackage(s): {:?}", referenced_kp));
+
+                // Log which pubkeys this Welcome is addressed to (p tags)
+                let addressed_to: Vec<String> = event.tags.iter()
+                    .filter(|tag| tag.kind().as_str() == "p")
+                    .filter_map(|tag| tag.content())
+                    .filter_map(|pk_hex| {
+                        nostr::PublicKey::from_hex(pk_hex)
+                            .ok()
+                            .and_then(|pk| pk.to_bech32().ok())
+                    })
+                    .collect();
+                if !addressed_to.is_empty() {
+                    log(&format!("  Addressed to npub(s): {:?}", addressed_to));
+                } else {
+                    log("  No p tags found");
+                }
+
+                log(&format!("  Our npub: {}", pubkey.to_bech32().expect("valid bech32")));
 
                 // Check if we already have this welcome in storage
                 match mdk.get_welcome(&event.id) {
@@ -473,6 +525,147 @@ pub fn fetch_welcome_events() -> js_sys::Promise {
         .await;
 
         result.map(|count| JsValue::from_f64(count as f64))
+    })
+}
+
+/// Generate KeyPackage and wait for group invite (all in one flow)
+/// Returns a Promise that resolves to the group name when joined
+#[wasm_bindgen]
+pub fn create_keypackage_and_wait_for_invite() -> js_sys::Promise {
+    future_to_promise(async move {
+        let result = async {
+            log("🔑 Creating KeyPackage and waiting for invite...");
+
+            // Get keys
+            let keys = get_keys()?;
+            let pubkey = keys.public_key();
+
+            // Create MDK (this instance will stay alive for the whole flow)
+            let mdk = create_mdk().await?;
+
+            // Step 1: Create KeyPackage
+            log("Creating KeyPackage...");
+            let relay_urls: Vec<RelayUrl> = RELAYS
+                .iter()
+                .filter_map(|r| RelayUrl::parse(r).ok())
+                .collect();
+
+            let (key_package_hex, tags) = mdk
+                .create_key_package_for_event(&pubkey, relay_urls)
+                .map_err(|e| JsValue::from_str(&format!("Failed to create KeyPackage: {}", e)))?;
+
+            // Step 2: Build and sign event
+            let event = EventBuilder::new(Kind::Custom(443), key_package_hex)
+                .tags(tags.to_vec())
+                .sign_with_keys(&keys)
+                .map_err(|e| JsValue::from_str(&format!("Failed to sign event: {}", e)))?;
+
+            let kp_event_id = event.id;
+            log(&format!("KeyPackage event ID: {}", kp_event_id.to_hex()));
+
+            // Step 3: Publish to relays
+            let client = Client::default();
+            for relay in RELAYS {
+                if let Ok(url) = RelayUrl::parse(relay) {
+                    let _ = client.add_relay(url).await;
+                }
+            }
+            client.connect().await;
+
+            log("Publishing KeyPackage to relays...");
+            client.send_event(&event).await
+                .map_err(|e| JsValue::from_str(&format!("Failed to publish: {}", e)))?;
+
+            log(&format!("✅ KeyPackage published! Your npub: {}", pubkey.to_bech32().expect("valid bech32")));
+            log("⏳ Waiting for group invite...");
+
+            // Mark this KeyPackage as created
+            let storage = MdkHybridStorage::new().await?;
+            storage.mark_key_package_created(kp_event_id)?;
+
+            // Step 4: Poll for Welcome messages
+            loop {
+                // Wait 2 seconds between checks
+                let promise = js_sys::Promise::new(&mut |resolve, _| {
+                    let window = web_sys::window().expect("window");
+                    window.set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, 2000).expect("setTimeout");
+                });
+                wasm_bindgen_futures::JsFuture::from(promise).await?;
+
+                // Check for Welcomes
+                log("Checking for Welcomes...");
+                let filter = nostr::Filter::new().kind(Kind::Custom(444));
+
+                let welcomes = client.fetch_events(filter, Duration::from_secs(5)).await
+                    .map_err(|e| JsValue::from_str(&format!("Failed to fetch Welcomes: {}", e)))?;
+
+                // Filter to Welcomes that reference our KeyPackage
+                let matching_welcomes: Vec<_> = welcomes.iter()
+                    .filter(|w| w.tags.iter().any(|tag| {
+                        tag.kind().as_str() == "e" &&
+                        tag.content().map(|c| c == kp_event_id.to_hex()).unwrap_or(false)
+                    }))
+                    .collect();
+
+                if !matching_welcomes.is_empty() {
+                    log(&format!("Found {} Welcome(s)!", matching_welcomes.len()));
+
+                    // Process the first Welcome
+                    let welcome_event = matching_welcomes[0];
+                    log(&format!("Processing Welcome: {}", welcome_event.id.to_hex()));
+
+                    // Convert to UnsignedEvent
+                    let rumor = nostr::UnsignedEvent {
+                        id: None,
+                        pubkey: welcome_event.pubkey,
+                        created_at: welcome_event.created_at,
+                        kind: welcome_event.kind,
+                        tags: welcome_event.tags.clone(),
+                        content: welcome_event.content.clone(),
+                    };
+
+                    // Process Welcome
+                    let welcome = mdk.process_welcome(&welcome_event.id, &rumor)
+                        .map_err(|e| JsValue::from_str(&format!("Failed to process Welcome: {}", e)))?;
+
+                    log(&format!("Welcome processed! Group: {}", welcome.group_name));
+
+                    // Accept Welcome (join the group)
+                    mdk.accept_welcome(&welcome)
+                        .map_err(|e| JsValue::from_str(&format!("Failed to accept Welcome: {}", e)))?;
+
+                    log(&format!("✅ Joined group: {}", welcome.group_name));
+
+                    // Send a "hi" message to the group
+                    log("Sending greeting message...");
+                    let greeting_rumor = nostr::UnsignedEvent {
+                        id: None,
+                        pubkey,
+                        created_at: nostr::Timestamp::now(),
+                        kind: Kind::GiftWrap,  // Use GiftWrap kind for MLS messages
+                        tags: nostr::Tags::new(),
+                        content: "Hi everyone! 👋".to_string(),
+                    };
+
+                    let message_event = mdk.create_message(&welcome.mls_group_id, greeting_rumor)
+                        .map_err(|e| JsValue::from_str(&format!("Failed to create message: {}", e)))?;
+
+                    // Publish greeting message
+                    client.send_event(&message_event).await
+                        .map_err(|e| JsValue::from_str(&format!("Failed to send message: {}", e)))?;
+
+                    log("✅ Greeting sent!");
+
+                    // Disconnect and return
+                    let _ = client.disconnect().await;
+
+                    return Ok::<String, JsValue>(welcome.group_name);
+                }
+            }
+        }
+        .await;
+
+        result.map(|name| JsValue::from_str(&name))
     })
 }
 
