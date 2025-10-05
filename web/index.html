@@ -162,6 +162,21 @@
                 <button onclick="refreshGroups()">Refresh Groups</button>
                 <button onclick="processWelcomes()">Check for Invites</button>
             </div>
+
+            <!-- Chat Section -->
+            <div id="chat-section" class="section" style="display: none;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                    <h2 id="chat-group-name">💬 Chat</h2>
+                    <button onclick="closeChat()">← Back to Groups</button>
+                </div>
+                <div id="chat-messages" style="height: 400px; overflow-y: auto; border: 1px solid #ccc; padding: 10px; margin-bottom: 10px; background: #f9f9f9;">
+                    <p style="color: #666;">Loading messages...</p>
+                </div>
+                <div style="display: flex; gap: 10px;">
+                    <input type="text" id="chat-input" placeholder="Type a message..." style="flex: 1; padding: 10px; border: 1px solid #ccc; border-radius: 4px;">
+                    <button onclick="sendChatMessage()" style="padding: 10px 20px;">Send</button>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -216,6 +231,8 @@
             process_pending_welcomes,
             create_keypackage_and_wait_for_invite,
             send_message_to_group,
+            get_messages_for_group,
+            subscribe_to_group_messages,
             log
         } from './pkg/mdk_ecash_web.js';
 
@@ -299,9 +316,14 @@
                                 <small>${group.description || 'No description'}</small><br>
                                 <small style="color: #666;">Last activity: ${lastMessage}</small>
                             </div>
-                            <button onclick="pingGroup('${group.id}')" style="margin-left: 10px;">
-                                Ping
-                            </button>
+                            <div style="display: flex; gap: 5px;">
+                                <button onclick="openChat('${group.id}', '${(group.name || 'Unnamed Group').replace(/'/g, "\\'")}')">
+                                    💬 Chat
+                                </button>
+                                <button onclick="pingGroup('${group.id}')">
+                                    Ping
+                                </button>
+                            </div>
                         </div>`;
                     }).join('');
                     document.getElementById('groups-status').innerHTML =
@@ -358,6 +380,141 @@
                 statusDiv.innerHTML = `<div class="error">Failed to process invites: ${err}</div>`;
             }
         };
+
+        // Chat interface variables
+        let currentChatGroupId = null;
+        let currentChatGroupName = null;
+
+        window.openChat = async function(groupId, groupName) {
+            console.log(`💬 Opening chat for group: ${groupName} (${groupId})`);
+
+            // Store current group info
+            currentChatGroupId = groupId;
+            currentChatGroupName = groupName;
+
+            // Update UI
+            document.getElementById('chat-group-name').textContent = `💬 ${groupName}`;
+            document.getElementById('groups-section').style.display = 'none';
+            document.getElementById('chat-section').style.display = 'block';
+
+            // Load messages
+            await loadMessages(groupId);
+
+            // Subscribe to new messages
+            await subscribe_to_group_messages(groupId, (message) => {
+                console.log('📨 New message received:', message);
+                addMessageToChat(message);
+            });
+        };
+
+        window.closeChat = function() {
+            console.log('← Closing chat');
+            document.getElementById('chat-section').style.display = 'none';
+            document.getElementById('groups-section').style.display = 'block';
+            currentChatGroupId = null;
+            currentChatGroupName = null;
+        };
+
+        async function loadMessages(groupId) {
+            try {
+                document.getElementById('chat-messages').innerHTML = '<p style="color: #666;">Loading messages...</p>';
+
+                const messagesJson = await get_messages_for_group(groupId);
+                const messages = JSON.parse(messagesJson);
+
+                console.log(`📬 Loaded ${messages.length} message(s)`);
+
+                const chatDiv = document.getElementById('chat-messages');
+                if (messages.length === 0) {
+                    chatDiv.innerHTML = '<p style="color: #666;">No messages yet. Be the first to send one!</p>';
+                } else {
+                    chatDiv.innerHTML = messages.map(msg => {
+                        const timestamp = new Date(msg.created_at * 1000).toLocaleTimeString();
+                        const npub = msg.pubkey.substring(0, 16);
+                        return `
+                        <div style="margin-bottom: 10px; padding: 8px; background: white; border-radius: 4px;">
+                            <div style="font-size: 0.85em; color: #666; margin-bottom: 4px;">
+                                <strong>${npub}...</strong> • ${timestamp}
+                            </div>
+                            <div>${msg.content}</div>
+                        </div>`;
+                    }).join('');
+                }
+
+                // Scroll to bottom
+                chatDiv.scrollTop = chatDiv.scrollHeight;
+            } catch (err) {
+                console.error('❌ Failed to load messages:', err);
+                document.getElementById('chat-messages').innerHTML =
+                    `<p style="color: red;">Failed to load messages: ${err}</p>`;
+            }
+        }
+
+        function addMessageToChat(message) {
+            const chatDiv = document.getElementById('chat-messages');
+
+            // Remove "no messages" text if present
+            if (chatDiv.querySelector('p')) {
+                chatDiv.innerHTML = '';
+            }
+
+            const timestamp = new Date(message.created_at * 1000).toLocaleTimeString();
+            const npub = message.pubkey.substring(0, 16);
+
+            const messageHtml = `
+            <div style="margin-bottom: 10px; padding: 8px; background: white; border-radius: 4px;">
+                <div style="font-size: 0.85em; color: #666; margin-bottom: 4px;">
+                    <strong>${npub}...</strong> • ${timestamp}
+                </div>
+                <div>${message.content}</div>
+            </div>`;
+
+            chatDiv.innerHTML += messageHtml;
+
+            // Scroll to bottom
+            chatDiv.scrollTop = chatDiv.scrollHeight;
+        }
+
+        window.sendChatMessage = async function() {
+            const input = document.getElementById('chat-input');
+            const message = input.value.trim();
+
+            if (!message) {
+                return;
+            }
+
+            if (!currentChatGroupId) {
+                alert('No group selected');
+                return;
+            }
+
+            try {
+                console.log(`📤 Sending message: "${message}"`);
+                await send_message_to_group(currentChatGroupId, message);
+                console.log('✅ Message sent');
+
+                // Clear input
+                input.value = '';
+
+                // Reload messages to show our sent message
+                await loadMessages(currentChatGroupId);
+            } catch (err) {
+                console.error('❌ Failed to send message:', err);
+                alert(`Failed to send message: ${err}`);
+            }
+        };
+
+        // Allow Enter key to send message
+        window.addEventListener('DOMContentLoaded', () => {
+            const chatInput = document.getElementById('chat-input');
+            if (chatInput) {
+                chatInput.addEventListener('keypress', (e) => {
+                    if (e.key === 'Enter') {
+                        sendChatMessage();
+                    }
+                });
+            }
+        });
 
         async function displayNpub() {
             try {

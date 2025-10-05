@@ -1,11 +1,12 @@
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::future_to_promise;
 use nostr::{Keys, ToBech32, EventBuilder, Kind, RelayUrl};
-use nostr_sdk::Client;
+use nostr_sdk::{Client, RelayPoolNotification};
 use web_sys::{window, Storage};
 use std::sync::Arc;
 use std::str::FromStr;
 use std::time::Duration;
+use serde::Serialize;
 
 mod wallet_db;
 use wallet_db::HybridWalletDatabase;
@@ -769,6 +770,149 @@ pub fn send_message_to_group(group_id_hex: String, message_content: String) -> j
             // Disconnect
             let _ = client.disconnect().await;
             log("✅ Message sent successfully!");
+
+            Ok::<(), JsValue>(())
+        }
+        .await;
+
+        result.map(|_| JsValue::undefined())
+    })
+}
+
+/// Get messages for a group from storage
+/// Returns a Promise that resolves to a JSON array of messages
+#[wasm_bindgen]
+pub fn get_messages_for_group(group_id_hex: String) -> js_sys::Promise {
+    future_to_promise(async move {
+        let result = async {
+            // Decode group ID from hex
+            let group_id_bytes = hex::decode(&group_id_hex)
+                .map_err(|e| JsValue::from_str(&format!("Invalid group ID hex: {}", e)))?;
+            let group_id = GroupId::from_slice(&group_id_bytes);
+
+            // Get storage
+            let storage = MdkHybridStorage::new().await?;
+
+            // Get messages using the GroupStorage trait
+            use mdk_storage_traits::groups::GroupStorage;
+            let messages = storage.messages(&group_id)
+                .map_err(|e| JsValue::from_str(&format!("Failed to get messages: {}", e)))?;
+
+            // Convert messages to JSON
+            #[derive(Serialize)]
+            struct MessageJson {
+                id: String,
+                pubkey: String,
+                content: String,
+                created_at: u64,
+                state: String,
+            }
+
+            let messages_json: Vec<MessageJson> = messages.iter().map(|msg| {
+                MessageJson {
+                    id: msg.id.to_hex(),
+                    pubkey: msg.pubkey.to_hex(),
+                    content: msg.content.clone(),
+                    created_at: msg.created_at.as_u64(),
+                    state: msg.state.to_string(),
+                }
+            }).collect();
+
+            let json = serde_json::to_string(&messages_json)
+                .map_err(|e| JsValue::from_str(&format!("Failed to serialize: {}", e)))?;
+
+            Ok::<String, JsValue>(json)
+        }
+        .await;
+
+        result.map(|json| JsValue::from_str(&json))
+    })
+}
+
+/// Subscribe to group messages and call a JavaScript callback for each new message
+/// The callback will receive a JSON object with message details
+#[wasm_bindgen]
+pub fn subscribe_to_group_messages(group_id_hex: String, callback: js_sys::Function) -> js_sys::Promise {
+    future_to_promise(async move {
+        let result = async {
+            log(&format!("📡 Subscribing to messages for group {}", &group_id_hex[..16]));
+
+            // Decode group ID
+            let group_id_bytes = hex::decode(&group_id_hex)
+                .map_err(|e| JsValue::from_str(&format!("Invalid group ID hex: {}", e)))?;
+            let group_id = GroupId::from_slice(&group_id_bytes);
+
+            // Create client and connect to relays
+            let client = Client::default();
+            for relay in RELAYS {
+                if let Ok(url) = RelayUrl::parse(relay) {
+                    log(&format!("  Adding relay: {}", relay));
+                    let _ = client.add_relay(url).await;
+                }
+            }
+            client.connect().await;
+            log("  ✓ Connected to relays");
+
+            // Subscribe to MLS group messages (kind 445) from recent history
+            let now = nostr::Timestamp::now();
+            let recent = nostr::Timestamp::from(now.as_u64().saturating_sub(10));
+            let filter = nostr::Filter::new()
+                .kind(Kind::MlsGroupMessage)
+                .since(recent);
+
+            log("  Subscribing to MLS group messages (kind 445)...");
+            client.subscribe(filter, None).await
+                .map_err(|e| JsValue::from_str(&format!("Failed to subscribe: {}", e)))?;
+            log("  ✓ Subscribed successfully");
+
+            // Spawn a background task to listen for notifications
+            wasm_bindgen_futures::spawn_local(async move {
+                log("  📻 Starting notification listener...");
+                let mut notifications = client.notifications();
+
+                while let Ok(notification) = notifications.recv().await {
+                    if let RelayPoolNotification::Event { event, .. } = notification {
+                        log(&format!("  📩 Received event: {}", event.id.to_hex()));
+
+                        // Create MDK instance and process the message
+                        match create_mdk().await {
+                            Ok(mdk) => {
+                                match mdk.process_message(&event) {
+                                    Ok(result) => {
+                                        use mdk_core::prelude::MessageProcessingResult;
+                                        if let MessageProcessingResult::ApplicationMessage(msg) = result {
+                                            log(&format!("  ✅ Application message: '{}'", msg.content));
+
+                                            // Check if this message belongs to the current group
+                                            if msg.mls_group_id == group_id {
+                                                // Prepare JSON for callback
+                                                let msg_json = serde_json::json!({
+                                                    "id": msg.id.to_hex(),
+                                                    "pubkey": msg.pubkey.to_hex(),
+                                                    "content": msg.content,
+                                                    "created_at": msg.created_at.as_u64(),
+                                                    "state": msg.state.to_string(),
+                                                });
+
+                                                // Call the JavaScript callback
+                                                if let Ok(js_value) = serde_wasm_bindgen::to_value(&msg_json) {
+                                                    let _ = callback.call1(&JsValue::NULL, &js_value);
+                                                }
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        log(&format!("  ⚠️  Failed to process message: {}", e));
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                log(&format!("  ⚠️  Failed to create MDK: {:?}", e));
+                            }
+                        }
+                    }
+                }
+            });
 
             Ok::<(), JsValue>(())
         }
