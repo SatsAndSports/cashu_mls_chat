@@ -882,9 +882,13 @@ pub fn subscribe_to_group_messages(group_id_hex: String, callback: js_sys::Funct
                                         use mdk_core::prelude::MessageProcessingResult;
                                         if let MessageProcessingResult::ApplicationMessage(msg) = result {
                                             log(&format!("  ✅ Application message: '{}'", msg.content));
+                                            log(&format!("     Message group ID: {}", hex::encode(msg.mls_group_id.as_slice())));
+                                            log(&format!("     Target group ID: {}", hex::encode(group_id.as_slice())));
 
                                             // Check if this message belongs to the current group
                                             if msg.mls_group_id == group_id {
+                                                log("  🎯 Message matches current group! Calling callback...");
+
                                                 // Prepare JSON for callback
                                                 let msg_json = serde_json::json!({
                                                     "id": msg.id.to_hex(),
@@ -896,9 +900,18 @@ pub fn subscribe_to_group_messages(group_id_hex: String, callback: js_sys::Funct
 
                                                 // Call the JavaScript callback
                                                 if let Ok(js_value) = serde_wasm_bindgen::to_value(&msg_json) {
-                                                    let _ = callback.call1(&JsValue::NULL, &js_value);
+                                                    match callback.call1(&JsValue::NULL, &js_value) {
+                                                        Ok(_) => log("  ✅ Callback invoked successfully"),
+                                                        Err(e) => log(&format!("  ❌ Callback failed: {:?}", e)),
+                                                    }
+                                                } else {
+                                                    log("  ❌ Failed to serialize message to JS value");
                                                 }
+                                            } else {
+                                                log("  ⏭️  Message is for a different group, skipping");
                                             }
+                                        } else {
+                                            log(&format!("  ℹ️  Non-application message: {:?}", result));
                                         }
                                     }
                                     Err(e) => {
