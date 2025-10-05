@@ -416,6 +416,10 @@
             currentChatGroupName = null;
         };
 
+        // Store tokens by ID for redemption
+        const tokenStore = new Map();
+        let tokenIdCounter = 0;
+
         // Format message content, detecting and formatting Cashu tokens
         async function formatMessageContent(content) {
             // Detect cashu tokens (start with cashuA or cashuB)
@@ -442,7 +446,14 @@
                         // If URL parsing fails, use the full string
                     }
 
-                    const tokenHtml = `<span style="background: #ff8800; color: white; padding: 4px 8px; border-radius: 4px; font-weight: bold; display: inline-block; margin: 2px 0;">${info.amount} sats @ ${mintDisplay}</span>`;
+                    // Store token for redemption
+                    const tokenId = `token-${tokenIdCounter++}`;
+                    tokenStore.set(tokenId, token);
+
+                    const tokenHtml = `<span style="background: #ff8800; color: white; padding: 4px 8px; border-radius: 4px; font-weight: bold; display: inline-block; margin: 2px 0;">
+                        ${info.amount} sats @ ${mintDisplay}
+                        <button id="${tokenId}" onclick="redeemToken('${tokenId}')" style="background: white; color: #ff8800; border: none; padding: 2px 6px; margin-left: 4px; border-radius: 3px; cursor: pointer; font-weight: bold; font-size: 0.9em;">Redeem</button>
+                    </span>`;
                     formattedContent = formattedContent.replace(token, tokenHtml);
                 } catch (e) {
                     console.error('Failed to parse token:', e);
@@ -452,6 +463,46 @@
 
             return formattedContent;
         }
+
+        window.redeemToken = async function(tokenId) {
+            const token = tokenStore.get(tokenId);
+            if (!token) {
+                alert('Token not found');
+                return;
+            }
+
+            const button = document.getElementById(tokenId);
+            if (!button) return;
+
+            // Disable button during redemption
+            button.disabled = true;
+            button.textContent = 'Redeeming...';
+
+            try {
+                console.log('💰 Redeeming token...');
+                const amount = await receive_token(token);
+                console.log(`✅ Redeemed ${amount} sats!`);
+
+                // Update button to show success
+                button.textContent = 'Redeemed ✓';
+                button.style.background = '#4CAF50';
+                button.style.color = 'white';
+
+                // Update wallet balance
+                const newBalance = await get_balance();
+                document.getElementById('balance').textContent = newBalance;
+
+                // Remove token from store
+                tokenStore.delete(tokenId);
+
+                alert(`Successfully redeemed ${amount} sats!`);
+            } catch (err) {
+                console.error('❌ Failed to redeem token:', err);
+                button.disabled = false;
+                button.textContent = 'Redeem';
+                alert(`Failed to redeem token: ${err}`);
+            }
+        };
 
         async function loadMessages(groupId) {
             try {
