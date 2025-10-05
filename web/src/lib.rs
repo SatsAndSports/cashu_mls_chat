@@ -18,6 +18,7 @@ use cdk::nuts::{CurrencyUnit, Token};
 use cdk::mint_url::MintUrl;
 
 use mdk_core::MDK;
+use mdk_storage_traits::GroupId;
 
 // Relay URLs
 const RELAYS: &[&str] = &[
@@ -714,6 +715,85 @@ pub fn process_pending_welcomes() -> js_sys::Promise {
         .await;
 
         result.map(|count| JsValue::from_f64(count as f64))
+    })
+}
+
+/// Send a message to a group
+/// Returns a Promise that resolves when the message is sent
+#[wasm_bindgen]
+pub fn send_message_to_group(group_id_hex: String, message_content: String) -> js_sys::Promise {
+    future_to_promise(async move {
+        let result = async {
+            log(&format!("📤 Sending message to group {}", &group_id_hex[..16]));
+            log(&format!("  Message content: {}", message_content));
+
+            // Get keys
+            let keys = get_keys()?;
+            let pubkey = keys.public_key();
+            log(&format!("  Sender npub: {}", pubkey.to_bech32().expect("valid bech32")));
+
+            // Decode group ID from hex
+            let group_id_bytes = hex::decode(&group_id_hex)
+                .map_err(|e| JsValue::from_str(&format!("Invalid group ID hex: {}", e)))?;
+            let group_id = GroupId::from_slice(&group_id_bytes);
+            log(&format!("  Decoded group ID: {} bytes", group_id_bytes.len()));
+
+            // Create MDK
+            log("  Creating MDK instance...");
+            let mdk = create_mdk().await?;
+            log("  ✓ MDK instance created");
+
+            // Verify group exists
+            log("  Checking if group exists...");
+            let group = mdk.get_group(&group_id)
+                .map_err(|e| JsValue::from_str(&format!("Failed to get group: {}", e)))?
+                .ok_or_else(|| JsValue::from_str("Group not found"))?;
+            log(&format!("  ✓ Group found: {}", &group.name));
+
+            // Create message rumor
+            log("  Creating message rumor...");
+            let rumor = nostr::UnsignedEvent {
+                id: None,
+                pubkey,
+                created_at: nostr::Timestamp::now(),
+                kind: Kind::GiftWrap,
+                tags: nostr::Tags::new(),
+                content: message_content.clone(),
+            };
+            log("  ✓ Message rumor created");
+
+            // Create encrypted message
+            log("  Encrypting message with MLS...");
+            let message_event = mdk.create_message(&group_id, rumor)
+                .map_err(|e| JsValue::from_str(&format!("Failed to create message: {}", e)))?;
+            log(&format!("  ✓ Message encrypted, event ID: {}", message_event.id.to_hex()));
+
+            // Publish to relays
+            log("  Connecting to relays...");
+            let client = Client::default();
+            for relay in RELAYS {
+                if let Ok(url) = RelayUrl::parse(relay) {
+                    log(&format!("    Adding relay: {}", relay));
+                    let _ = client.add_relay(url).await;
+                }
+            }
+            client.connect().await;
+            log("  ✓ Connected to relays");
+
+            log("  Publishing message event...");
+            client.send_event(&message_event).await
+                .map_err(|e| JsValue::from_str(&format!("Failed to send event: {}", e)))?;
+            log("  ✓ Message event published");
+
+            // Disconnect
+            let _ = client.disconnect().await;
+            log("✅ Message sent successfully!");
+
+            Ok::<(), JsValue>(())
+        }
+        .await;
+
+        result.map(|_| JsValue::undefined())
     })
 }
 

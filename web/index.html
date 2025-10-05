@@ -217,6 +217,7 @@
             fetch_welcome_events,
             process_pending_welcomes,
             create_keypackage_and_wait_for_invite,
+            send_message_to_group,
             log
         } from './pkg/mdk_ecash_web.js';
 
@@ -321,10 +322,13 @@
 
         window.refreshGroups = async function() {
             try {
+                console.log('🔄 Refreshing groups list...');
                 document.getElementById('groups-status').textContent = 'Loading groups...';
 
                 const groupsJson = await get_groups();
+                console.log('  Received groups JSON:', groupsJson);
                 const groups = JSON.parse(groupsJson);
+                console.log(`  Parsed ${groups.length} group(s)`);
 
                 const listDiv = document.getElementById('groups-list');
                 if (groups.length === 0) {
@@ -332,25 +336,47 @@
                     document.getElementById('groups-status').innerHTML = '<div class="success">✓ Ready (0 groups)</div>';
                 } else {
                     listDiv.innerHTML = groups.map(group => {
+                        console.log(`  Rendering group: ${group.name || 'Unnamed'} (ID: ${group.id})`);
                         const lastMessage = group.last_message_at
                             ? new Date(group.last_message_at * 1000).toLocaleString()
                             : 'No messages yet';
                         return `
-                        <div class="group-item">
-                            <strong>${group.name || 'Unnamed Group'}</strong><br>
-                            <small>${group.description || 'No description'}</small><br>
-                            <small style="color: #666;">Last activity: ${lastMessage}</small>
+                        <div class="group-item" style="display: flex; justify-content: space-between; align-items: center;">
+                            <div style="flex: 1;">
+                                <strong>${group.name || 'Unnamed Group'}</strong><br>
+                                <small>${group.description || 'No description'}</small><br>
+                                <small style="color: #666;">Last activity: ${lastMessage}</small>
+                            </div>
+                            <button onclick="pingGroup('${group.id}')" style="margin-left: 10px;">
+                                Ping
+                            </button>
                         </div>`;
                     }).join('');
                     document.getElementById('groups-status').innerHTML =
                         `<div class="success">✓ Found ${groups.length} group(s)</div>`;
                 }
 
+                console.log(`✅ Groups list refreshed (${groups.length} group(s))`);
                 log(`Loaded ${groups.length} group(s)`);
             } catch (err) {
-                console.error('Failed to fetch groups:', err);
+                console.error('❌ Failed to fetch groups:', err);
                 document.getElementById('groups-status').innerHTML =
                     `<div class="error">Failed to load: ${err}</div>`;
+            }
+        };
+
+        window.pingGroup = async function(groupIdHex) {
+            console.log('🏓 Ping button clicked!');
+            console.log(`  Group ID: ${groupIdHex}`);
+
+            try {
+                console.log('  Calling send_message_to_group...');
+                await send_message_to_group(groupIdHex, '(ping)');
+                console.log('✅ Ping sent successfully!');
+                alert('Ping sent! 🏓');
+            } catch (err) {
+                console.error('❌ Failed to send ping:', err);
+                alert(`Failed to send ping: ${err}`);
             }
         };
 

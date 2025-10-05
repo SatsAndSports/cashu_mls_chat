@@ -171,48 +171,8 @@ impl MdkHybridStorage {
         self.state.lock().unwrap().created_key_package_event_ids.clone()
     }
 
-    pub async fn new() -> Result<Self, JsValue> {
-        // Try to load from localStorage
-        let state = match Self::load_from_localstorage().await {
-            Ok(state) => {
-                log("Loaded MDK state from localStorage");
-                state
-            }
-            Err(_) => {
-                log("No existing MDK state, starting fresh");
-                MdkState::default()
-            }
-        };
-
-        let storage = Self {
-            state: Arc::new(Mutex::new(state)),
-            openmls_storage: MemoryStorage::default(),
-        };
-
-        // Save immediately so mdk_state appears in localStorage
-        storage.save_snapshot()?;
-        log("Saved initial MDK snapshot to localStorage");
-
-        Ok(storage)
-    }
-
-    fn save_snapshot(&self) -> Result<(), JsValue> {
-        let state = self.state.lock().unwrap();
-        let serializable = state.to_serializable();
-        let json = serde_json::to_string(&serializable)
-            .map_err(|e| JsValue::from_str(&format!("Serialization error: {}", e)))?;
-
-        // Save to localStorage (synchronous in WASM)
-        let storage = window()
-            .ok_or_else(|| JsValue::from_str("No window"))?
-            .local_storage()?
-            .ok_or_else(|| JsValue::from_str("No localStorage"))?;
-
-        storage.set_item("mdk_state", &json)?;
-        Ok(())
-    }
-
-    async fn load_from_localstorage() -> Result<MdkState, JsValue> {
+    /// Load MDK state from localStorage
+    fn load_mdk_state() -> Result<MdkState, JsValue> {
         let storage = window()
             .ok_or_else(|| JsValue::from_str("No window"))?
             .local_storage()?
@@ -229,6 +189,132 @@ impl MdkHybridStorage {
             .map_err(|e| JsValue::from_str(&format!("State conversion error: {}", e)))?;
 
         Ok(state)
+    }
+
+    /// Save MDK state to localStorage
+    fn save_mdk_state(&self) -> Result<(), JsValue> {
+        let state = self.state.lock().unwrap();
+        let serializable = state.to_serializable();
+        let json = serde_json::to_string(&serializable)
+            .map_err(|e| JsValue::from_str(&format!("Serialization error: {}", e)))?;
+
+        let storage = window()
+            .ok_or_else(|| JsValue::from_str("No window"))?
+            .local_storage()?
+            .ok_or_else(|| JsValue::from_str("No localStorage"))?;
+
+        storage.set_item("mdk_state", &json)?;
+        Ok(())
+    }
+
+    /// Load OpenMLS MemoryStorage from localStorage
+    fn load_openmls_storage() -> Result<MemoryStorage, JsValue> {
+        let storage = window()
+            .ok_or_else(|| JsValue::from_str("No window"))?
+            .local_storage()?
+            .ok_or_else(|| JsValue::from_str("No localStorage"))?;
+
+        let base64_data = match storage.get_item("openmls_storage")? {
+            Some(data) => data,
+            None => {
+                log("No OpenMLS storage found, starting fresh");
+                return Ok(MemoryStorage::default());
+            }
+        };
+
+        // Decode from base64
+        use base64::{Engine as _, engine::general_purpose};
+        let bytes = general_purpose::STANDARD.decode(&base64_data)
+            .map_err(|e| JsValue::from_str(&format!("Base64 decode error: {}", e)))?;
+
+        // Deserialize the HashMap with hex string keys
+        let string_map: std::collections::HashMap<String, String> = serde_json::from_slice(&bytes)
+            .map_err(|e| JsValue::from_str(&format!("Failed to deserialize OpenMLS storage: {}", e)))?;
+
+        // Convert hex string keys/values back to Vec<u8>
+        let map: std::collections::HashMap<Vec<u8>, Vec<u8>> = string_map
+            .into_iter()
+            .map(|(k, v)| {
+                let key = hex::decode(&k).map_err(|e| JsValue::from_str(&format!("Failed to decode key: {}", e)))?;
+                let value = hex::decode(&v).map_err(|e| JsValue::from_str(&format!("Failed to decode value: {}", e)))?;
+                Ok((key, value))
+            })
+            .collect::<Result<_, JsValue>>()?;
+
+        // Create MemoryStorage from the HashMap
+        let memory_storage = MemoryStorage {
+            values: std::sync::RwLock::new(map),
+        };
+
+        log(&format!("Loaded OpenMLS storage with {} entries", memory_storage.values.read().unwrap().len()));
+
+        Ok(memory_storage)
+    }
+
+    /// Save OpenMLS MemoryStorage to localStorage
+    fn save_openmls_storage(&self) -> Result<(), JsValue> {
+        // Get the values from MemoryStorage
+        let values = self.openmls_storage.values.read().unwrap();
+
+        log(&format!("Saving OpenMLS storage with {} entries", values.len()));
+
+        // Convert Vec<u8> keys/values to hex strings for JSON compatibility
+        let string_map: std::collections::HashMap<String, String> = values
+            .iter()
+            .map(|(k, v)| (hex::encode(k), hex::encode(v)))
+            .collect();
+
+        // Serialize the HashMap with string keys to JSON
+        let bytes = serde_json::to_vec(&string_map)
+            .map_err(|e| JsValue::from_str(&format!("Failed to serialize OpenMLS storage: {}", e)))?;
+
+        // Encode to base64 for localStorage
+        use base64::{Engine as _, engine::general_purpose};
+        let base64_data = general_purpose::STANDARD.encode(&bytes);
+
+        let storage = window()
+            .ok_or_else(|| JsValue::from_str("No window"))?
+            .local_storage()?
+            .ok_or_else(|| JsValue::from_str("No localStorage"))?;
+
+        storage.set_item("openmls_storage", &base64_data)?;
+
+        Ok(())
+    }
+
+    pub async fn new() -> Result<Self, JsValue> {
+        // Load MDK state (group metadata, messages, etc.)
+        let state = match Self::load_mdk_state() {
+            Ok(state) => {
+                log("Loaded MDK state from localStorage");
+                state
+            }
+            Err(_) => {
+                log("No existing MDK state, starting fresh");
+                MdkState::default()
+            }
+        };
+
+        // Load OpenMLS storage (MLS encryption state)
+        let openmls_storage = Self::load_openmls_storage()?;
+
+        let storage = Self {
+            state: Arc::new(Mutex::new(state)),
+            openmls_storage,
+        };
+
+        // Save immediately to ensure storage is initialized
+        storage.save_snapshot()?;
+        log("Initialized MDK storage");
+
+        Ok(storage)
+    }
+
+    fn save_snapshot(&self) -> Result<(), JsValue> {
+        // Save both MDK state and OpenMLS storage
+        self.save_mdk_state()?;
+        self.save_openmls_storage()?;
+        Ok(())
     }
 }
 
