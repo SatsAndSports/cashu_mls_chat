@@ -224,6 +224,7 @@
             init_wallet,
             get_balance,
             receive_token,
+            parse_token_info,
             create_and_broadcast_key_package,
             fetch_my_key_packages,
             get_groups,
@@ -401,9 +402,9 @@
             await loadMessages(groupId);
 
             // Subscribe to new messages
-            await subscribe_to_group_messages(groupId, (message) => {
+            await subscribe_to_group_messages(groupId, async (message) => {
                 console.log('📨 New message received:', message);
-                addMessageToChat(message);
+                await addMessageToChat(message);
             });
         };
 
@@ -414,6 +415,43 @@
             currentChatGroupId = null;
             currentChatGroupName = null;
         };
+
+        // Format message content, detecting and formatting Cashu tokens
+        async function formatMessageContent(content) {
+            // Detect cashu tokens (start with cashuA or cashuB)
+            const tokenRegex = /cashu[AB][A-Za-z0-9_-]+/g;
+            const tokens = content.match(tokenRegex);
+
+            if (!tokens) {
+                return content;
+            }
+
+            let formattedContent = content;
+
+            for (const token of tokens) {
+                try {
+                    const infoJson = await parse_token_info(token);
+                    const info = JSON.parse(infoJson);
+
+                    // Extract just the hostname from the mint URL
+                    let mintDisplay = info.mint;
+                    try {
+                        const url = new URL(info.mint);
+                        mintDisplay = url.hostname;
+                    } catch (e) {
+                        // If URL parsing fails, use the full string
+                    }
+
+                    const tokenHtml = `<span style="background: #ff8800; color: white; padding: 4px 8px; border-radius: 4px; font-weight: bold; display: inline-block; margin: 2px 0;">${info.amount} sats @ ${mintDisplay}</span>`;
+                    formattedContent = formattedContent.replace(token, tokenHtml);
+                } catch (e) {
+                    console.error('Failed to parse token:', e);
+                    // Leave the token as-is if parsing fails
+                }
+            }
+
+            return formattedContent;
+        }
 
         async function loadMessages(groupId) {
             try {
@@ -428,17 +466,21 @@
                 if (messages.length === 0) {
                     chatDiv.innerHTML = '<p style="color: #666;">No messages yet. Be the first to send one!</p>';
                 } else {
-                    chatDiv.innerHTML = messages.map(msg => {
+                    // Format all messages
+                    const formattedMessages = await Promise.all(messages.map(async msg => {
                         const timestamp = new Date(msg.created_at * 1000).toLocaleTimeString();
                         const npub = msg.pubkey.substring(0, 16);
+                        const formattedContent = await formatMessageContent(msg.content);
                         return `
                         <div style="margin-bottom: 10px; padding: 8px; background: white; border-radius: 4px;">
                             <div style="font-size: 0.85em; color: #666; margin-bottom: 4px;">
                                 <strong>${npub}...</strong> • ${timestamp}
                             </div>
-                            <div>${msg.content}</div>
+                            <div>${formattedContent}</div>
                         </div>`;
-                    }).join('');
+                    }));
+
+                    chatDiv.innerHTML = formattedMessages.join('');
                 }
 
                 // Scroll to bottom
@@ -450,7 +492,7 @@
             }
         }
 
-        function addMessageToChat(message) {
+        async function addMessageToChat(message) {
             const chatDiv = document.getElementById('chat-messages');
 
             // Remove "no messages" text if present
@@ -460,13 +502,14 @@
 
             const timestamp = new Date(message.created_at * 1000).toLocaleTimeString();
             const npub = message.pubkey.substring(0, 16);
+            const formattedContent = await formatMessageContent(message.content);
 
             const messageHtml = `
             <div style="margin-bottom: 10px; padding: 8px; background: white; border-radius: 4px;">
                 <div style="font-size: 0.85em; color: #666; margin-bottom: 4px;">
                     <strong>${npub}...</strong> • ${timestamp}
                 </div>
-                <div>${message.content}</div>
+                <div>${formattedContent}</div>
             </div>`;
 
             chatDiv.innerHTML += messageHtml;

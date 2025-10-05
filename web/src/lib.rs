@@ -214,6 +214,47 @@ pub fn get_balance() -> js_sys::Promise {
     })
 }
 
+/// Parse token information without receiving it
+/// Returns a Promise that resolves to JSON with token info
+#[wasm_bindgen]
+pub fn parse_token_info(token_str: String) -> js_sys::Promise {
+    future_to_promise(async move {
+        let result = async {
+            // Parse token
+            let token = Token::from_str(&token_str)
+                .map_err(|e| JsValue::from_str(&format!("Invalid token: {}", e)))?;
+
+            // Get total amount
+            let amount = token.value()
+                .map_err(|e| JsValue::from_str(&format!("Failed to get value: {}", e)))?;
+
+            // Get mint URL
+            let mint_url = token.mint_url()
+                .map_err(|e| JsValue::from_str(&format!("Failed to get mint URL: {}", e)))?;
+
+            // Create JSON response
+            #[derive(Serialize)]
+            struct TokenInfo {
+                amount: u64,
+                mint: String,
+            }
+
+            let info = TokenInfo {
+                amount: u64::from(amount),
+                mint: mint_url.to_string(),
+            };
+
+            let json = serde_json::to_string(&info)
+                .map_err(|e| JsValue::from_str(&format!("Failed to serialize: {}", e)))?;
+
+            Ok::<String, JsValue>(json)
+        }
+        .await;
+
+        result.map(|json| JsValue::from_str(&json))
+    })
+}
+
 /// Receive ecash token
 /// Returns a Promise that resolves to the amount received
 #[wasm_bindgen]
