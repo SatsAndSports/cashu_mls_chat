@@ -89,7 +89,6 @@ fn get_local_storage() -> Result<Storage, JsValue> {
 #[wasm_bindgen(start)]
 pub fn init() {
     // Set panic hook for better error messages in console
-    #[cfg(feature = "console_error_panic_hook")]
     console_error_panic_hook::set_once();
 }
 
@@ -329,6 +328,151 @@ pub fn get_groups() -> js_sys::Promise {
         .await;
 
         result.map(|json| JsValue::from_str(&json))
+    })
+}
+
+/// Fetch Welcome events from Nostr relays and process them with MDK
+/// Returns a Promise that resolves to the number of Welcome events processed
+#[wasm_bindgen]
+pub fn fetch_welcome_events() -> js_sys::Promise {
+    future_to_promise(async move {
+        let result = async {
+            log("Fetching Welcome events from Nostr relays...");
+
+            // Get our keys
+            let keys = get_keys()?;
+            let pubkey = keys.public_key();
+
+            // Create client and connect to relays
+            let client = Client::default();
+            for relay in RELAYS {
+                if let Ok(url) = RelayUrl::parse(relay) {
+                    let _ = client.add_relay(url).await;
+                }
+            }
+            client.connect().await;
+
+            // Step 1: Get our KeyPackage event IDs
+            log("Finding our KeyPackage events...");
+            let kp_filter = nostr::Filter::new()
+                .kind(Kind::Custom(443))
+                .author(pubkey);
+
+            let kp_events = client.fetch_events(kp_filter, Duration::from_secs(5)).await
+                .map_err(|e| JsValue::from_str(&format!("Failed to fetch KeyPackages: {}", e)))?;
+
+            let kp_event_ids: Vec<String> = kp_events.iter().map(|e| e.id.to_hex()).collect();
+            log(&format!("Found {} KeyPackage(s): {:?}", kp_event_ids.len(), kp_event_ids));
+
+            // Step 2: Get Welcome events that reference our KeyPackages
+            log("Querying relays for Welcome events...");
+
+            let filter = nostr::Filter::new()
+                .kind(Kind::Custom(444));
+
+            let all_welcomes = client.fetch_events(filter, Duration::from_secs(10)).await
+                .map_err(|e| JsValue::from_str(&format!("Failed to fetch Welcome events: {}", e)))?;
+
+            let total_welcomes = all_welcomes.len();
+
+            // Filter to only Welcomes that reference our KeyPackages
+            let events: Vec<_> = all_welcomes.into_iter().filter(|event| {
+                event.tags.iter().any(|tag| {
+                    let kind = tag.kind();
+                    if kind.as_str() == "e" {
+                        if let Some(event_id) = tag.content() {
+                            return kp_event_ids.iter().any(|kp_id| kp_id == event_id);
+                        }
+                    }
+                    false
+                })
+            }).collect();
+
+            log(&format!("Found {} Welcome event(s) for us (out of {} total)", events.len(), total_welcomes));
+
+            // Disconnect from relays
+            let _ = client.disconnect().await;
+
+            // Process each Welcome event with MDK
+            let mdk = create_mdk().await?;
+            let mut processed = 0;
+
+            for event in events {
+                log(&format!("Processing Welcome event: {}", event.id.to_hex()));
+
+                // Check if we already have this welcome in storage
+                match mdk.get_welcome(&event.id) {
+                    Ok(Some(_)) => {
+                        log("  ⚠ Welcome already in storage, skipping");
+                        continue;
+                    }
+                    Ok(None) => {
+                        // Not in storage yet, proceed
+                    }
+                    Err(e) => {
+                        log(&format!("  ⚠ Error checking welcome storage: {}", e));
+                        continue;
+                    }
+                }
+
+                // Try to extract the rumor from the event
+                // Welcome events might be gift-wrapped (kind 1059) or direct (kind 444)
+                match nostr::nips::nip59::UnwrappedGift::from_gift_wrap(&keys, &event).await {
+                    Ok(unwrapped) => {
+                        // Successfully unwrapped - process the rumor
+                        log("  Unwrapped gift-wrapped Welcome");
+                        match mdk.process_welcome(&event.id, &unwrapped.rumor) {
+                            Ok(_) => {
+                                log("  ✓ Welcome processed successfully");
+                                processed += 1;
+                            }
+                            Err(e) => {
+                                log(&format!("  ✗ Failed to process Welcome: {}", e));
+                            }
+                        }
+                    }
+                    Err(_) => {
+                        // Not gift-wrapped - process as direct kind 444 event
+                        log("  Processing as direct (non-gift-wrapped) Welcome");
+
+                        // Log event details for debugging
+                        log(&format!("    Event author: {}", event.pubkey.to_hex()));
+                        log(&format!("    Event kind: {}", event.kind.as_u16()));
+                        log(&format!("    Event tags: {:?}", event.tags.len()));
+                        log(&format!("    Content length: {} bytes", event.content.len()));
+                        log(&format!("    Content preview: {}...", &event.content[..event.content.len().min(100)]));
+
+                        // Convert Event to UnsignedEvent
+                        let rumor = nostr::UnsignedEvent {
+                            id: None,
+                            pubkey: event.pubkey,
+                            created_at: event.created_at,
+                            kind: event.kind,
+                            tags: event.tags.clone(),
+                            content: event.content.clone(),
+                        };
+
+                        log("  Calling MDK.process_welcome()...");
+                        match mdk.process_welcome(&event.id, &rumor) {
+                            Ok(_) => {
+                                log("  ✓ Welcome processed successfully");
+                                processed += 1;
+                            }
+                            Err(e) => {
+                                log(&format!("  ✗ Failed to process Welcome: {}", e));
+                            }
+                        }
+                    }
+                }
+            }
+
+            log(&format!("✅ Processed {} Welcome event(s)", processed));
+
+            Ok::<u32, JsValue>(processed)
+        }
+        .await;
+
+        result.map(|count| JsValue::from_f64(count as f64))
     })
 }
 

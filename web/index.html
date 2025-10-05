@@ -192,6 +192,7 @@
             create_and_broadcast_key_package,
             fetch_my_key_packages,
             get_groups,
+            fetch_welcome_events,
             process_pending_welcomes,
             log
         } from './pkg/mdk_ecash_web.js';
@@ -335,13 +336,21 @@
             statusDiv.innerHTML = 'Checking for new group invites...';
 
             try {
+                // Step 1: Fetch Welcome events from Nostr relays
+                statusDiv.innerHTML = 'Fetching invites from Nostr relays...';
+                const fetched = await fetch_welcome_events();
+                log(`Fetched and processed ${fetched} Welcome event(s)`);
+
+                // Step 2: Auto-accept any pending welcomes
+                statusDiv.innerHTML = 'Processing invites...';
                 const count = await process_pending_welcomes();
+
                 if (count > 0) {
                     statusDiv.innerHTML = `<div class="success">✅ Joined ${count} new group(s)!</div>`;
                     // Refresh groups list
                     await refreshGroups();
                 } else {
-                    statusDiv.innerHTML = '<div class="success">No new invites</div>';
+                    statusDiv.innerHTML = '<div class="success">No new invites found</div>';
                 }
             } catch (err) {
                 console.error('Failed to process welcomes:', err);

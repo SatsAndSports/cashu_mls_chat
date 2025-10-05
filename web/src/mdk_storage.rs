@@ -165,19 +165,19 @@ impl MdkHybridStorage {
         };
 
         // Save immediately so mdk_state appears in localStorage
-        storage.save_snapshot().await?;
+        storage.save_snapshot()?;
         log("Saved initial MDK snapshot to localStorage");
 
         Ok(storage)
     }
 
-    async fn save_snapshot(&self) -> Result<(), JsValue> {
+    fn save_snapshot(&self) -> Result<(), JsValue> {
         let state = self.state.lock().unwrap();
         let serializable = state.to_serializable();
         let json = serde_json::to_string(&serializable)
             .map_err(|e| JsValue::from_str(&format!("Serialization error: {}", e)))?;
 
-        // Save to localStorage
+        // Save to localStorage (synchronous in WASM)
         let storage = window()
             .ok_or_else(|| JsValue::from_str("No window"))?
             .local_storage()?
@@ -248,9 +248,7 @@ impl GroupStorage for MdkHybridStorage {
         drop(state);
 
         // Save to localStorage
-        tokio::runtime::Handle::current().block_on(async {
-            self.save_snapshot().await.map_err(to_group_error)
-        })
+        self.save_snapshot().map_err(to_group_error)
     }
 
     fn messages(&self, group_id: &GroupId) -> Result<Vec<Message>, GroupError> {
@@ -292,9 +290,7 @@ impl GroupStorage for MdkHybridStorage {
         state.group_relays.insert(group_id.clone(), group_relays);
         drop(state);
 
-        tokio::runtime::Handle::current().block_on(async {
-            self.save_snapshot().await.map_err(to_group_error)
-        })
+        self.save_snapshot().map_err(to_group_error)
     }
 
     fn get_group_exporter_secret(
@@ -317,9 +313,7 @@ impl GroupStorage for MdkHybridStorage {
             .group_exporter_secrets
             .insert(key, group_exporter_secret);
 
-        tokio::runtime::Handle::current().block_on(async {
-            self.save_snapshot().await.map_err(to_group_error)
-        })
+        self.save_snapshot().map_err(to_group_error)
     }
 }
 
@@ -339,9 +333,7 @@ impl MessageStorage for MdkHybridStorage {
 
         drop(state);
 
-        tokio::runtime::Handle::current().block_on(async {
-            self.save_snapshot().await.map_err(to_message_error)
-        })
+        self.save_snapshot().map_err(to_message_error)
     }
 
     fn find_message_by_event_id(&self, event_id: &EventId) -> Result<Option<Message>, MessageError> {
@@ -356,9 +348,7 @@ impl MessageStorage for MdkHybridStorage {
             .processed_messages
             .insert(processed_message.wrapper_event_id, processed_message);
 
-        tokio::runtime::Handle::current().block_on(async {
-            self.save_snapshot().await.map_err(to_message_error)
-        })
+        self.save_snapshot().map_err(to_message_error)
     }
 
     fn find_processed_message_by_event_id(
@@ -379,9 +369,7 @@ impl WelcomeStorage for MdkHybridStorage {
             .welcomes
             .insert(welcome.id, welcome);
 
-        tokio::runtime::Handle::current().block_on(async {
-            self.save_snapshot().await.map_err(to_welcome_error)
-        })
+        self.save_snapshot().map_err(to_welcome_error)
     }
 
     fn find_welcome_by_event_id(&self, event_id: &EventId) -> Result<Option<Welcome>, WelcomeError> {
@@ -406,9 +394,7 @@ impl WelcomeStorage for MdkHybridStorage {
             .processed_welcomes
             .insert(processed_welcome.wrapper_event_id, processed_welcome);
 
-        tokio::runtime::Handle::current().block_on(async {
-            self.save_snapshot().await.map_err(to_welcome_error)
-        })
+        self.save_snapshot().map_err(to_welcome_error)
     }
 
     fn find_processed_welcome_by_event_id(
