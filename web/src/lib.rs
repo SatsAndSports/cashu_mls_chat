@@ -614,8 +614,8 @@ pub fn create_keypackage_and_wait_for_invite() -> js_sys::Promise {
                     let welcome_event = matching_welcomes[0];
                     log(&format!("Processing Welcome: {}", welcome_event.id.to_hex()));
 
-                    // Convert to UnsignedEvent
-                    let rumor = nostr::UnsignedEvent {
+                    // Convert to UnsignedEvent (compute the ID)
+                    let mut rumor = nostr::UnsignedEvent {
                         id: None,
                         pubkey: welcome_event.pubkey,
                         created_at: welcome_event.created_at,
@@ -623,6 +623,8 @@ pub fn create_keypackage_and_wait_for_invite() -> js_sys::Promise {
                         tags: welcome_event.tags.clone(),
                         content: welcome_event.content.clone(),
                     };
+                    // Ensure the ID is set
+                    let _ = rumor.id();
 
                     // Process Welcome
                     let welcome = mdk.process_welcome(&welcome_event.id, &rumor)
