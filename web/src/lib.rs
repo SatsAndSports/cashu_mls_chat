@@ -829,6 +829,16 @@ pub fn get_messages_for_group(group_id_hex: String) -> js_sys::Promise {
     })
 }
 
+/// Message JSON structure for JavaScript callback
+#[derive(Serialize)]
+struct MessageCallback {
+    id: String,
+    pubkey: String,
+    content: String,
+    created_at: u64,
+    state: String,
+}
+
 /// Subscribe to group messages and call a JavaScript callback for each new message
 /// The callback will receive a JSON object with message details
 #[wasm_bindgen]
@@ -889,17 +899,17 @@ pub fn subscribe_to_group_messages(group_id_hex: String, callback: js_sys::Funct
                                             if msg.mls_group_id == group_id {
                                                 log("  🎯 Message matches current group! Calling callback...");
 
-                                                // Prepare JSON for callback
-                                                let msg_json = serde_json::json!({
-                                                    "id": msg.id.to_hex(),
-                                                    "pubkey": msg.pubkey.to_hex(),
-                                                    "content": msg.content,
-                                                    "created_at": msg.created_at.as_u64(),
-                                                    "state": msg.state.to_string(),
-                                                });
+                                                // Prepare callback data
+                                                let msg_data = MessageCallback {
+                                                    id: msg.id.to_hex(),
+                                                    pubkey: msg.pubkey.to_hex(),
+                                                    content: msg.content,
+                                                    created_at: msg.created_at.as_u64(),
+                                                    state: msg.state.to_string(),
+                                                };
 
                                                 // Call the JavaScript callback
-                                                if let Ok(js_value) = serde_wasm_bindgen::to_value(&msg_json) {
+                                                if let Ok(js_value) = serde_wasm_bindgen::to_value(&msg_data) {
                                                     match callback.call1(&JsValue::NULL, &js_value) {
                                                         Ok(_) => log("  ✅ Callback invoked successfully"),
                                                         Err(e) => log(&format!("  ❌ Callback failed: {:?}", e)),
