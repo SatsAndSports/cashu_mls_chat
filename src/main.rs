@@ -481,9 +481,9 @@ impl AppState {
         let user = &self.users[user_index];
         let group_id = user.mls_group_id.as_ref().unwrap();
 
-        // Create message with NIP-13 Proof of Work (difficulty: 21)
+        // Create message with NIP-13 Proof of Work (difficulty: 10)
         let rumor = EventBuilder::new(Kind::Custom(9), &content)
-            .pow(22)
+            .pow(10)
             .build(user.keys.public_key());
 
         let message_event = user
