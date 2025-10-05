@@ -294,11 +294,6 @@ pub fn create_and_broadcast_key_package() -> js_sys::Promise {
 
             log(&format!("✅ KeyPackage published! Event ID: {}", event_id));
 
-            // Mark this KeyPackage as created (so we know we have the private keys)
-            let storage = MdkHybridStorage::new().await?;
-            storage.mark_key_package_created(event.id)?;
-            log("  Marked KeyPackage as created in this session");
-
             Ok::<String, JsValue>(event_id)
         }
         .await;
@@ -374,21 +369,11 @@ pub fn fetch_welcome_events() -> js_sys::Promise {
             let kp_events = client.fetch_events(kp_filter, Duration::from_secs(5)).await
                 .map_err(|e| JsValue::from_str(&format!("Failed to fetch KeyPackages: {}", e)))?;
 
-            let all_kp_event_ids: Vec<String> = kp_events.iter().map(|e| e.id.to_hex()).collect();
-            log(&format!("Found {} KeyPackage(s) on relays: {:?}", all_kp_event_ids.len(), all_kp_event_ids));
-
-            // Filter to only KeyPackages we have private keys for (created in this session)
-            let storage = MdkHybridStorage::new().await?;
-            let kp_with_keys = storage.get_key_package_event_ids_with_keys();
-            let kp_event_ids: Vec<String> = kp_events.iter()
-                .filter(|e| kp_with_keys.contains(&e.id))
-                .map(|e| e.id.to_hex())
-                .collect();
-
-            log(&format!("Found {} KeyPackage(s) with private keys: {:?}", kp_event_ids.len(), kp_event_ids));
+            let kp_event_ids: Vec<String> = kp_events.iter().map(|e| e.id.to_hex()).collect();
+            log(&format!("Found {} KeyPackage(s) on relays: {:?}", kp_event_ids.len(), kp_event_ids));
 
             if kp_event_ids.is_empty() {
-                log("⚠️ No KeyPackages with private keys found. Create a new KeyPackage to receive invites.");
+                log("⚠️ No KeyPackages found. Create a new KeyPackage to receive invites.");
                 return Ok::<u32, JsValue>(0);
             }
 
@@ -579,10 +564,6 @@ pub fn create_keypackage_and_wait_for_invite() -> js_sys::Promise {
 
             log(&format!("✅ KeyPackage published! Your npub: {}", pubkey.to_bech32().expect("valid bech32")));
             log("⏳ Waiting for group invite...");
-
-            // Mark this KeyPackage as created
-            let storage = MdkHybridStorage::new().await?;
-            storage.mark_key_package_created(kp_event_id)?;
 
             // Step 4: Poll for Welcome messages
             loop {

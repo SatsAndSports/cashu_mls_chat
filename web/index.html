@@ -148,12 +148,10 @@
 
             <!-- Key Packages Section -->
             <div id="keypackages-section" class="section">
-                <h2>🔑 Key Packages</h2>
-                <div id="keypackages-status">Loading...</div>
-                <div id="keypackages-list"></div>
+                <h2>🔑 Join a Group</h2>
+                <p>Click the button below to create a KeyPackage and wait for someone to invite you to a group.</p>
                 <button onclick="createKeyPackageAndWait()">🚀 Create KeyPackage & Wait for Invite</button>
-                <button onclick="createKeyPackage()">Create & Broadcast New KeyPackage</button>
-                <button onclick="refreshKeyPackages()">Refresh from Nostr</button>
+                <div id="keypackages-status" style="margin-top: 20px;"></div>
             </div>
 
             <!-- Groups Section -->
@@ -245,7 +243,6 @@
                 log("WASM module loaded successfully");
                 await displayNpub();
                 await initializeWallet();
-                await initializeKeyPackages();
                 await initializeGroups();
                 document.getElementById('buttons').style.display = 'block';
                 document.getElementById('status').innerHTML = '<div class="success">✓ Ready</div>';
@@ -268,51 +265,6 @@
                 console.error('Failed to initialize wallet:', err);
                 document.getElementById('wallet-status').innerHTML =
                     `<div class="error">Failed to initialize wallet: ${err}</div>`;
-            }
-        }
-
-        async function initializeKeyPackages() {
-            await refreshKeyPackages();
-        }
-
-        async function refreshKeyPackages() {
-            try {
-                document.getElementById('keypackages-status').textContent = 'Loading KeyPackages from Nostr...';
-
-                const packagesJson = await fetch_my_key_packages();
-                const packages = JSON.parse(packagesJson);
-
-                // Sort by created_at timestamp, newest first
-                packages.sort((a, b) => b.created_at - a.created_at);
-
-                const listDiv = document.getElementById('keypackages-list');
-                if (packages.length === 0) {
-                    listDiv.innerHTML = '<p style="color: #666;">No KeyPackages found. Create one to get started!</p>';
-                    document.getElementById('keypackages-status').innerHTML = '<div class="success">✓ Ready (0 KeyPackages)</div>';
-                } else {
-                    listDiv.innerHTML = '<ul style="list-style: none; padding: 0;">' +
-                        packages.map(pkg => {
-                            const relayStatus = pkg.relays.map(r => {
-                                return `<span style="color: green;">✓ ${r}</span>`;
-                            }).join(', ');
-                            return `
-                            <li style="padding: 10px; background: #f5f5f5; margin: 5px 0; border-radius: 4px;">
-                                <strong>Event:</strong> ${pkg.event_id.substring(0, 16)}...<br>
-                                <strong>Created:</strong> ${new Date(pkg.created_at * 1000).toLocaleString()}<br>
-                                <strong>Content:</strong> ${pkg.content_preview}...<br>
-                                <strong>Found on:</strong> ${relayStatus || '<span style="color: red;">No relays</span>'}
-                            </li>`;
-                        }).join('') +
-                        '</ul>';
-                    document.getElementById('keypackages-status').innerHTML =
-                        `<div class="success">✓ Found ${packages.length} KeyPackage(s)</div>`;
-                }
-
-                log(`Loaded ${packages.length} KeyPackage(s)`);
-            } catch (err) {
-                console.error('Failed to fetch KeyPackages:', err);
-                document.getElementById('keypackages-status').innerHTML =
-                    `<div class="error">Failed to load: ${err}</div>`;
             }
         }
 
@@ -483,24 +435,6 @@
                 statusDiv.innerHTML = `<div class="error">Failed to receive: ${err}</div>`;
             }
         };
-
-        window.createKeyPackage = async function() {
-            const statusDiv = document.getElementById('keypackages-status');
-            statusDiv.innerHTML = 'Creating and broadcasting KeyPackage...';
-
-            try {
-                const eventId = await create_and_broadcast_key_package();
-                log(`KeyPackage created with event ID: ${eventId}`);
-
-                // Refresh the list
-                await refreshKeyPackages();
-            } catch (err) {
-                console.error('Failed to create KeyPackage:', err);
-                statusDiv.innerHTML = `<div class="error">Failed to create: ${err}</div>`;
-            }
-        };
-
-        window.refreshKeyPackages = refreshKeyPackages;
 
         window.createKeyPackageAndWait = async function() {
             try {
