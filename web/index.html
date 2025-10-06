@@ -373,6 +373,9 @@
             document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
             document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
 
+            // Also hide chat section (uses inline display style)
+            document.getElementById('chat-section').style.display = 'none';
+
             // Show selected section
             document.getElementById(`${sectionName}-section`).classList.add('active');
 
@@ -532,9 +535,11 @@
             currentChatGroupId = groupId;
             currentChatGroupName = groupName;
 
-            // Update UI
+            // Hide all sections
+            document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+
+            // Update UI and show chat
             document.getElementById('chat-group-name').textContent = `💬 ${groupName}`;
-            document.getElementById('groups-section').style.display = 'none';
             document.getElementById('chat-section').style.display = 'block';
 
             // Load messages
@@ -549,10 +554,9 @@
 
         window.closeChat = function() {
             console.log('← Closing chat');
-            document.getElementById('chat-section').style.display = 'none';
-            document.getElementById('groups-section').style.display = 'block';
             currentChatGroupId = null;
             currentChatGroupName = null;
+            showSection('groups');
         };
 
         // Store tokens by ID for redemption
