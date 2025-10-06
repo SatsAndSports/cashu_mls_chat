@@ -115,10 +115,10 @@
     <div id="main">
         <!-- Sidebar -->
         <div id="sidebar">
-            <div class="nav-item active" onclick="showSection('identity')">🔐 Nostr Identity</div>
-            <div class="nav-item" onclick="showSection('wallet')">💰 Wallet</div>
-            <div class="nav-item" onclick="showSection('keypackages')">🔑 Key Packages</div>
-            <div class="nav-item" onclick="showSection('groups')">📱 Groups</div>
+            <div class="nav-item active" onclick="showSection('identity', event)">🔐 Nostr Identity</div>
+            <div class="nav-item" onclick="showSection('wallet', event)">💰 Wallet</div>
+            <div class="nav-item" onclick="showSection('keypackages', event)">🔑 Key Packages</div>
+            <div class="nav-item" onclick="showSection('groups', event)">📱 Groups</div>
         </div>
 
         <!-- Content Area -->
@@ -368,14 +368,25 @@
         let wasm;
 
         // Navigation
-        window.showSection = function(sectionName) {
+        window.showSection = function(sectionName, event) {
             // Hide all sections
             document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
             document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
 
             // Show selected section
             document.getElementById(`${sectionName}-section`).classList.add('active');
-            event.target.classList.add('active');
+
+            // Mark the nav item as active (if called from nav click)
+            if (event && event.target) {
+                event.target.classList.add('active');
+            } else {
+                // Called programmatically, find and activate the nav item
+                const navItem = Array.from(document.querySelectorAll('.nav-item'))
+                    .find(item => item.getAttribute('onclick')?.includes(`'${sectionName}'`));
+                if (navItem) {
+                    navItem.classList.add('active');
+                }
+            }
 
             // Load content if needed
             if (sectionName === 'groups') {
