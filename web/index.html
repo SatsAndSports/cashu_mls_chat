@@ -195,13 +195,20 @@
     </div>
 
     <!-- Wait for Invite Modal -->
-    <div id="wait-invite-modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000;">
-        <div style="background: white; max-width: 600px; margin: 50px auto; padding: 30px; border-radius: 8px; text-align: center;">
+    <div id="wait-invite-modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000; overflow-y: auto;">
+        <div style="background: white; max-width: 700px; margin: 50px auto; padding: 30px; border-radius: 8px; text-align: center;">
             <h2>⏳ Waiting for Group Invite</h2>
-            <p style="margin: 20px 0;">Your KeyPackage has been published!</p>
+            <p style="margin: 20px 0;">Your KeyPackage is being published!</p>
             <div class="npub" id="wait-npub" style="margin: 20px 0;"></div>
-            <p style="color: #666; margin: 20px 0;">Waiting for someone to invite you to a group...</p>
             <div id="wait-status" style="margin: 20px 0; font-weight: bold; color: #0066cc;"></div>
+
+            <!-- Relay Status -->
+            <div id="wait-relay-status" style="margin: 20px auto; max-width: 500px; text-align: left; font-size: 0.9em; max-height: 200px; overflow-y: auto; background: #f9f9f9; padding: 10px; border-radius: 4px; display: none;">
+                <div style="font-weight: bold; margin-bottom: 5px; text-align: center;">Relay Status:</div>
+                <div id="wait-relay-list"></div>
+            </div>
+
+            <p style="color: #666; margin: 20px 0;" id="wait-instruction">Waiting for someone to invite you to a group...</p>
             <div style="margin-top: 20px;">
                 <div style="display: inline-block; width: 40px; height: 40px; border: 4px solid #f3f3f3; border-top: 4px solid #0066cc; border-radius: 50%; animation: spin 1s linear infinite;"></div>
             </div>
@@ -353,8 +360,6 @@
             get_balance,
             receive_token,
             parse_token_info,
-            create_and_broadcast_key_package,
-            fetch_my_key_packages,
             get_groups,
             fetch_welcome_events,
             process_pending_welcomes,
@@ -829,15 +834,54 @@
             }
         };
 
+        // Intercept console.log to show relay status
+        const originalLog = console.log;
+        let relayStatusCapture = false;
+
+        console.log = function(...args) {
+            originalLog.apply(console, args);
+
+            if (relayStatusCapture && args.length > 0) {
+                const message = args[0].toString();
+
+                // Check for relay accept/reject messages
+                if (message.includes('✓') && message.includes('accepted')) {
+                    const relayList = document.getElementById('wait-relay-list');
+                    if (relayList) {
+                        document.getElementById('wait-relay-status').style.display = 'block';
+                        const relay = message.replace(/^\s+✓\s+/, '').replace(' accepted', '');
+                        relayList.innerHTML += `<div style="color: green; padding: 2px 0;">✓ ${relay}</div>`;
+                    }
+                } else if (message.includes('✗') && message.includes('rejected')) {
+                    const relayList = document.getElementById('wait-relay-list');
+                    if (relayList) {
+                        document.getElementById('wait-relay-status').style.display = 'block';
+                        const parts = message.replace(/^\s+✗\s+/, '').split(' rejected: ');
+                        const relay = parts[0];
+                        const error = parts[1] || 'unknown error';
+                        relayList.innerHTML += `<div style="color: #ff6600; padding: 2px 0;">✗ ${relay}: ${error}</div>`;
+                    }
+                }
+            }
+        };
+
         window.createKeyPackageAndWait = async function() {
             try {
-                // Show modal
+                // Reset and show modal
                 document.getElementById('wait-invite-modal').style.display = 'block';
                 document.getElementById('wait-npub').textContent = get_npub();
                 document.getElementById('wait-status').textContent = 'Creating KeyPackage...';
+                document.getElementById('wait-relay-list').innerHTML = '';
+                document.getElementById('wait-relay-status').style.display = 'none';
+
+                // Start capturing relay status
+                relayStatusCapture = true;
 
                 // Call the WASM function (it will poll and wait)
                 const groupName = await create_keypackage_and_wait_for_invite();
+
+                // Stop capturing
+                relayStatusCapture = false;
 
                 // Success!
                 document.getElementById('wait-status').innerHTML = `<div class="success">✅ Joined group: ${groupName}</div>`;
@@ -851,6 +895,7 @@
                 }, 2000);
             } catch (err) {
                 console.error('Failed to join group:', err);
+                relayStatusCapture = false;
                 document.getElementById('wait-status').innerHTML = `<div class="error">Failed: ${err}</div>`;
                 setTimeout(() => {
                     document.getElementById('wait-invite-modal').style.display = 'none';

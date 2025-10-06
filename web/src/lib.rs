@@ -308,62 +308,6 @@ pub fn receive_token(token_str: String) -> js_sys::Promise {
     })
 }
 
-/// Create and broadcast a new KeyPackage to Nostr relays
-/// Returns a Promise that resolves to the event ID
-#[wasm_bindgen]
-pub fn create_and_broadcast_key_package() -> js_sys::Promise {
-    future_to_promise(async move {
-        let result = async {
-            log("Creating KeyPackage...");
-
-            // Get keys and create MDK
-            let keys = get_keys()?;
-            let mdk = create_mdk().await?;
-
-            // Create KeyPackage for event
-            let relay_urls: Vec<RelayUrl> = RELAYS
-                .iter()
-                .filter_map(|r| RelayUrl::parse(r).ok())
-                .collect();
-
-            let (key_package_hex, tags) = mdk
-                .create_key_package_for_event(&keys.public_key(), relay_urls)
-                .map_err(|e| JsValue::from_str(&format!("Failed to create KeyPackage: {}", e)))?;
-
-            log(&format!("KeyPackage created: {}...", &key_package_hex[..20.min(key_package_hex.len())]));
-
-            // Build and sign event (kind 443)
-            let event = EventBuilder::new(Kind::Custom(443), key_package_hex)
-                .tags(tags.to_vec())
-                .sign_with_keys(&keys)
-                .map_err(|e| JsValue::from_str(&format!("Failed to sign event: {}", e)))?;
-
-            let event_id = event.id.to_hex();
-            log(&format!("Event signed: {}", event_id));
-
-            // Create client and publish to relays
-            let client = Client::default();
-            for relay in RELAYS {
-                if let Ok(url) = RelayUrl::parse(relay) {
-                    let _ = client.add_relay(url).await;
-                }
-            }
-            client.connect().await;
-
-            log("Publishing to relays...");
-            client.send_event(&event).await
-                .map_err(|e| JsValue::from_str(&format!("Failed to publish: {}", e)))?;
-
-            log(&format!("✅ KeyPackage published! Event ID: {}", event_id));
-
-            Ok::<String, JsValue>(event_id)
-        }
-        .await;
-
-        result.map(|event_id| JsValue::from_str(&event_id))
-    })
-}
-
 /// Get all groups from MDK storage
 /// Returns a Promise that resolves to a JSON array of groups
 #[wasm_bindgen]
@@ -611,7 +555,7 @@ pub fn create_keypackage_and_wait_for_invite() -> js_sys::Promise {
             let kp_event_id = event.id;
             log(&format!("KeyPackage event ID: {}", kp_event_id.to_hex()));
 
-            // Step 3: Publish to relays
+            // Step 3: Connect to relays and start listening for Welcomes BEFORE publishing
             let client = Client::default();
             for relay in RELAYS {
                 if let Ok(url) = RelayUrl::parse(relay) {
@@ -620,92 +564,110 @@ pub fn create_keypackage_and_wait_for_invite() -> js_sys::Promise {
             }
             client.connect().await;
 
+            // Subscribe to Welcomes that reference our KeyPackage
+            log("Starting Welcome subscription...");
+            let filter = nostr::Filter::new()
+                .kind(Kind::Custom(444))
+                .since(nostr::Timestamp::now());  // Only new Welcomes from now on
+
+            client.subscribe(filter, None).await
+                .map_err(|e| JsValue::from_str(&format!("Failed to subscribe: {}", e)))?;
+
+            // Step 4: Now publish KeyPackage (Welcomes can arrive while publishing!)
             log("Publishing KeyPackage to relays...");
-            client.send_event(&event).await
+            let send_result = client.send_event(&event).await
                 .map_err(|e| JsValue::from_str(&format!("Failed to publish: {}", e)))?;
 
             log(&format!("✅ KeyPackage published! Your npub: {}", pubkey.to_bech32().expect("valid bech32")));
+            for relay_url in send_result.success.iter() {
+                log(&format!("  ✓ {} accepted", relay_url));
+            }
+            for (relay_url, error) in send_result.failed.iter() {
+                log(&format!("  ✗ {} rejected: {}", relay_url, error));
+            }
             log("⏳ Waiting for group invite...");
 
-            // Step 4: Poll for Welcome messages
+            // Step 5: Listen for Welcome via subscription (may already be here!)
+            let mut notifications = client.notifications();
+            log("Listening for Welcome messages...");
+
             loop {
-                // Wait 2 seconds between checks
-                let promise = js_sys::Promise::new(&mut |resolve, _| {
-                    let window = web_sys::window().expect("window");
-                    window.set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, 2000).expect("setTimeout");
-                });
-                wasm_bindgen_futures::JsFuture::from(promise).await?;
+                // Wait for next notification from subscription
+                match notifications.recv().await {
+                    Ok(notification) => {
+                        if let nostr_sdk::RelayPoolNotification::Event { event: welcome_event, .. } = notification {
+                            log(&format!("📩 Received event: {}", welcome_event.id.to_hex()));
 
-                // Check for Welcomes
-                log("Checking for Welcomes...");
-                let filter = nostr::Filter::new().kind(Kind::Custom(444));
+                            // Check if this Welcome references our KeyPackage
+                            let references_our_kp = welcome_event.tags.iter().any(|tag| {
+                                tag.kind().as_str() == "e" &&
+                                tag.content().map(|c| c == kp_event_id.to_hex()).unwrap_or(false)
+                            });
 
-                let welcomes = client.fetch_events(filter, Duration::from_secs(5)).await
-                    .map_err(|e| JsValue::from_str(&format!("Failed to fetch Welcomes: {}", e)))?;
+                            if !references_our_kp {
+                                log("  Not for our KeyPackage, continuing...");
+                                continue;
+                            }
 
-                // Filter to Welcomes that reference our KeyPackage
-                let matching_welcomes: Vec<_> = welcomes.iter()
-                    .filter(|w| w.tags.iter().any(|tag| {
-                        tag.kind().as_str() == "e" &&
-                        tag.content().map(|c| c == kp_event_id.to_hex()).unwrap_or(false)
-                    }))
-                    .collect();
+                            log("  ✅ This Welcome is for our KeyPackage!");
 
-                if !matching_welcomes.is_empty() {
-                    log(&format!("Found {} Welcome(s)!", matching_welcomes.len()));
+                            // Process the Welcome
+                            log(&format!("Processing Welcome: {}", welcome_event.id.to_hex()));
 
-                    // Process the first Welcome
-                    let welcome_event = matching_welcomes[0];
-                    log(&format!("Processing Welcome: {}", welcome_event.id.to_hex()));
+                            // Convert to UnsignedEvent (compute the ID)
+                            let mut rumor = nostr::UnsignedEvent {
+                                id: None,
+                                pubkey: welcome_event.pubkey,
+                                created_at: welcome_event.created_at,
+                                kind: welcome_event.kind,
+                                tags: welcome_event.tags.clone(),
+                                content: welcome_event.content.clone(),
+                            };
+                            // Ensure the ID is set
+                            let _ = rumor.id();
 
-                    // Convert to UnsignedEvent (compute the ID)
-                    let mut rumor = nostr::UnsignedEvent {
-                        id: None,
-                        pubkey: welcome_event.pubkey,
-                        created_at: welcome_event.created_at,
-                        kind: welcome_event.kind,
-                        tags: welcome_event.tags.clone(),
-                        content: welcome_event.content.clone(),
-                    };
-                    // Ensure the ID is set
-                    let _ = rumor.id();
+                            // Process Welcome
+                            let welcome = mdk.process_welcome(&welcome_event.id, &rumor)
+                                .map_err(|e| JsValue::from_str(&format!("Failed to process Welcome: {}", e)))?;
 
-                    // Process Welcome
-                    let welcome = mdk.process_welcome(&welcome_event.id, &rumor)
-                        .map_err(|e| JsValue::from_str(&format!("Failed to process Welcome: {}", e)))?;
+                            log(&format!("Welcome processed! Group: {}", welcome.group_name));
 
-                    log(&format!("Welcome processed! Group: {}", welcome.group_name));
+                            // Accept Welcome (join the group)
+                            mdk.accept_welcome(&welcome)
+                                .map_err(|e| JsValue::from_str(&format!("Failed to accept Welcome: {}", e)))?;
 
-                    // Accept Welcome (join the group)
-                    mdk.accept_welcome(&welcome)
-                        .map_err(|e| JsValue::from_str(&format!("Failed to accept Welcome: {}", e)))?;
+                            log(&format!("✅ Joined group: {}", welcome.group_name));
 
-                    log(&format!("✅ Joined group: {}", welcome.group_name));
+                            // Send a "hi" message to the group
+                            log("Sending greeting message...");
+                            let greeting_rumor = nostr::UnsignedEvent {
+                                id: None,
+                                pubkey,
+                                created_at: nostr::Timestamp::now(),
+                                kind: Kind::GiftWrap,  // Use GiftWrap kind for MLS messages
+                                tags: nostr::Tags::new(),
+                                content: "Hi everyone! 👋".to_string(),
+                            };
 
-                    // Send a "hi" message to the group
-                    log("Sending greeting message...");
-                    let greeting_rumor = nostr::UnsignedEvent {
-                        id: None,
-                        pubkey,
-                        created_at: nostr::Timestamp::now(),
-                        kind: Kind::GiftWrap,  // Use GiftWrap kind for MLS messages
-                        tags: nostr::Tags::new(),
-                        content: "Hi everyone! 👋".to_string(),
-                    };
+                            let message_event = mdk.create_message(&welcome.mls_group_id, greeting_rumor)
+                                .map_err(|e| JsValue::from_str(&format!("Failed to create message: {}", e)))?;
 
-                    let message_event = mdk.create_message(&welcome.mls_group_id, greeting_rumor)
-                        .map_err(|e| JsValue::from_str(&format!("Failed to create message: {}", e)))?;
+                            // Publish greeting message
+                            client.send_event(&message_event).await
+                                .map_err(|e| JsValue::from_str(&format!("Failed to send message: {}", e)))?;
 
-                    // Publish greeting message
-                    client.send_event(&message_event).await
-                        .map_err(|e| JsValue::from_str(&format!("Failed to send message: {}", e)))?;
+                            log("✅ Greeting sent!");
 
-                    log("✅ Greeting sent!");
+                            // Disconnect and return
+                            let _ = client.disconnect().await;
 
-                    // Disconnect and return
-                    let _ = client.disconnect().await;
-
-                    return Ok::<String, JsValue>(welcome.group_name);
+                            return Ok::<String, JsValue>(welcome.group_name);
+                        }
+                    }
+                    Err(e) => {
+                        log(&format!("Error receiving notification: {:?}", e));
+                        // Continue waiting
+                    }
                 }
             }
         }
@@ -1006,82 +968,3 @@ pub fn subscribe_to_group_messages(group_id_hex: String, callback: js_sys::Funct
     })
 }
 
-/// Fetch KeyPackages from Nostr relays
-/// Returns a Promise that resolves to a JSON array of KeyPackage info with relay sources
-#[wasm_bindgen]
-pub fn fetch_my_key_packages() -> js_sys::Promise {
-    future_to_promise(async move {
-        let result = async {
-            log("Fetching KeyPackages from Nostr...");
-
-            // Get our public key
-            let keys = get_keys()?;
-            let pubkey = keys.public_key();
-
-            // Build filter for kind 443 events authored by us
-            let filter = nostr::Filter::new()
-                .kind(Kind::Custom(443))
-                .author(pubkey);
-
-            // Query each relay individually and track sources
-            use std::collections::HashMap;
-            let mut event_relays: HashMap<String, Vec<String>> = HashMap::new();
-            let mut all_events: HashMap<String, nostr::Event> = HashMap::new();
-
-            for relay_url in RELAYS {
-                log(&format!("Querying {}...", relay_url));
-
-                let client = Client::default();
-                if let Ok(url) = RelayUrl::parse(relay_url) {
-                    let _ = client.add_relay(url).await;
-                    client.connect().await;
-
-                    match client.fetch_events(filter.clone(), Duration::from_secs(5)).await {
-                        Ok(events) => {
-                            log(&format!("  Found {} event(s) on {}", events.len(), relay_url));
-                            for event in events {
-                                let event_id = event.id.to_hex();
-
-                                // Track which relay has this event
-                                event_relays.entry(event_id.clone())
-                                    .or_insert_with(Vec::new)
-                                    .push(relay_url.to_string());
-
-                                // Store event (only once)
-                                all_events.entry(event_id)
-                                    .or_insert(event);
-                            }
-                        }
-                        Err(e) => {
-                            log(&format!("  Error querying {}: {}", relay_url, e));
-                        }
-                    }
-
-                    // Disconnect from this relay
-                    let _ = client.disconnect().await;
-                }
-            }
-
-            log(&format!("Found {} unique KeyPackage(s)", all_events.len()));
-
-            // Convert to JSON array with relay info
-            let packages: Vec<_> = all_events.iter().map(|(event_id, event)| {
-                let relays = event_relays.get(event_id).cloned().unwrap_or_default();
-                serde_json::json!({
-                    "event_id": event.id.to_hex(),
-                    "created_at": event.created_at.as_u64(),
-                    "content_preview": &event.content[..20.min(event.content.len())],
-                    "relays": relays,
-                })
-            }).collect();
-
-            let json = serde_json::to_string(&packages)
-                .map_err(|e| JsValue::from_str(&format!("Failed to serialize: {}", e)))?;
-
-            Ok::<String, JsValue>(json)
-        }
-        .await;
-
-        result.map(|json| JsValue::from_str(&json))
-    })
-}
