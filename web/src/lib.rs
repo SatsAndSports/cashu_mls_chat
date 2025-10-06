@@ -24,6 +24,26 @@ use mdk_storage_traits::GroupId;
 // Relay URLs
 const RELAYS: &[&str] = &[
     "ws://localhost:8080",
+    "wss://relay.nostr.band",
+    "wss://nostr.bitcoiner.social",
+    "wss://nostr.land",
+    "wss://relay.primal.net",
+    "wss://nostr.strits.dk",
+    "wss://nostr.oxtr.dev",
+    "wss://nostr-pub.wellorder.net",
+    "wss://orangesync.tech",
+    "wss://relay.snort.social",
+    "wss://vitor.nostr1.com",
+    "wss://nostr.chaima.info",
+    "wss://theforest.nostr1.com",
+    "wss://articles.layer3.news",
+    "wss://nostr-01.yakihonne.com",
+    "wss://wot.nostr.party",
+    "wss://no.str.cr",
+    "wss://offchain.pub",
+    "wss://primus.nostr1.com",
+    "wss://bitcoiner.social",
+    "wss://relay.jeffg.fyi",
 ];
 
 /// Helper function to create MDK instance
