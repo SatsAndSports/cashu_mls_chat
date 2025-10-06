@@ -216,6 +216,134 @@
     </style>
 
     <script type="module">
+        // ==========================================
+        // TAB LOCK MECHANISM
+        // ==========================================
+        const LOCK_KEY = 'mdk_tab_lock';
+        const LOCK_HEARTBEAT_INTERVAL = 2000; // 2 seconds
+        const LOCK_STALE_TIMEOUT = 5000; // 5 seconds
+
+        let hasLock = false;
+        let heartbeatInterval = null;
+        let lockCheckInterval = null;
+
+        function acquireLock() {
+            const now = Date.now();
+            const lockData = localStorage.getItem(LOCK_KEY);
+
+            if (lockData) {
+                try {
+                    const lock = JSON.parse(lockData);
+                    const age = now - lock.timestamp;
+
+                    // If lock is fresh (< 5 sec), another tab owns it
+                    if (age < LOCK_STALE_TIMEOUT) {
+                        return false;
+                    }
+                    // Lock is stale, we can take it
+                    console.log('Lock was stale, taking over');
+                } catch (e) {
+                    console.error('Failed to parse lock data:', e);
+                }
+            }
+
+            // Acquire the lock
+            const lockInfo = {
+                timestamp: now,
+                tabId: Math.random().toString(36).substring(7)
+            };
+            localStorage.setItem(LOCK_KEY, JSON.stringify(lockInfo));
+            hasLock = true;
+            console.log('🔒 Lock acquired');
+            return true;
+        }
+
+        function updateHeartbeat() {
+            if (!hasLock) return;
+
+            const now = Date.now();
+            const lockInfo = {
+                timestamp: now,
+                tabId: 'current'
+            };
+            localStorage.setItem(LOCK_KEY, JSON.stringify(lockInfo));
+        }
+
+        function releaseLock() {
+            if (hasLock) {
+                localStorage.removeItem(LOCK_KEY);
+                hasLock = false;
+                console.log('🔓 Lock released');
+            }
+        }
+
+        function showLockWarning() {
+            document.body.innerHTML = `
+                <div style="display: flex; align-items: center; justify-content: center; height: 100vh; background: #f5f5f5; font-family: Arial, sans-serif;">
+                    <div style="text-align: center; padding: 40px; max-width: 600px; background: white; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.1);">
+                        <div style="font-size: 4em; margin-bottom: 20px;">👋</div>
+                        <h2 style="color: #333; margin-bottom: 20px; font-weight: normal;">Already open in another tab</h2>
+                        <p style="font-size: 1.1em; color: #666; margin-bottom: 20px; line-height: 1.6;">
+                            You've already got this app running somewhere else. To keep your wallet and messages safe,
+                            please use that tab instead.
+                        </p>
+                        <p style="font-size: 0.95em; color: #888; margin-top: 30px; line-height: 1.6;">
+                            If you closed the other tab, just wait a moment and <a href="#" onclick="location.reload()" style="color: #0066cc; text-decoration: none; border-bottom: 1px solid #0066cc;">click here to reload</a>.
+                        </p>
+                    </div>
+                </div>
+            `;
+        }
+
+        // Try to acquire lock on load
+        if (!acquireLock()) {
+            showLockWarning();
+            throw new Error('Cannot start - app already open in another tab');
+        }
+
+        // Send heartbeats
+        heartbeatInterval = setInterval(updateHeartbeat, LOCK_HEARTBEAT_INTERVAL);
+
+        // Release lock on unload
+        window.addEventListener('beforeunload', () => {
+            releaseLock();
+        });
+
+        // Listen for storage events (another tab released lock)
+        window.addEventListener('storage', (e) => {
+            if (e.key === LOCK_KEY) {
+                if (!hasLock) {
+                    // We don't have lock, check if we can acquire it now
+                    if (e.newValue === null || e.newValue === '') {
+                        // Lock was released, try to acquire
+                        setTimeout(() => {
+                            if (acquireLock()) {
+                                location.reload();
+                            }
+                        }, 100);
+                    }
+                }
+            }
+        });
+
+        // Periodically check if we still have the lock
+        lockCheckInterval = setInterval(() => {
+            if (hasLock) {
+                const lockData = localStorage.getItem(LOCK_KEY);
+                if (!lockData) {
+                    console.error('Lock was lost!');
+                    hasLock = false;
+                    showLockWarning();
+                    clearInterval(heartbeatInterval);
+                    clearInterval(lockCheckInterval);
+                }
+            }
+        }, 1000);
+
+        // ==========================================
+        // END TAB LOCK MECHANISM
+        // ==========================================
+
         import init, {
             get_or_create_keys,
             generate_keys,
