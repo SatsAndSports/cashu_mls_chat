@@ -645,26 +645,6 @@ pub fn create_keypackage_and_wait_for_invite() -> js_sys::Promise {
 
                             log(&format!("✅ Joined group: {}", welcome.group_name));
 
-                            // Send a "hi" message to the group
-                            log("Sending greeting message...");
-                            let greeting_rumor = nostr::UnsignedEvent {
-                                id: None,
-                                pubkey,
-                                created_at: nostr::Timestamp::now(),
-                                kind: Kind::GiftWrap,  // Use GiftWrap kind for MLS messages
-                                tags: nostr::Tags::new(),
-                                content: "Hi everyone! 👋".to_string(),
-                            };
-
-                            let message_event = mdk.create_message(&welcome.mls_group_id, greeting_rumor)
-                                .map_err(|e| JsValue::from_str(&format!("Failed to create message: {}", e)))?;
-
-                            // Publish greeting message
-                            client.send_event(&message_event).await
-                                .map_err(|e| JsValue::from_str(&format!("Failed to send message: {}", e)))?;
-
-                            log("✅ Greeting sent!");
-
                             // Disconnect and return
                             let _ = client.disconnect().await;
 
@@ -854,7 +834,12 @@ pub fn invite_member_to_group(group_id_hex: String, member_npub: String) -> js_s
             let invite_result = mdk.add_members(&group_id, &[newest.clone()])
                 .map_err(|e| JsValue::from_str(&format!("Failed to add member: {}", e)))?;
 
-            // Publish Welcome message if any
+            // Step 1: Publish evolution event (Kind:445) to notify existing members
+            log("Publishing group evolution event...");
+            client.send_event(&invite_result.evolution_event).await
+                .map_err(|e| JsValue::from_str(&format!("Failed to publish evolution: {}", e)))?;
+
+            // Step 2: Publish Welcome message if any
             if let Some(welcome_rumors) = invite_result.welcome_rumors {
                 log(&format!("Publishing Welcome message to {}...", &member_npub[..16]));
 
@@ -871,6 +856,11 @@ pub fn invite_member_to_group(group_id_hex: String, member_npub: String) -> js_s
             } else {
                 log(&format!("✅ Member added to group (no Welcome needed)"));
             }
+
+            // Step 3: Merge the pending commit to finalize our state
+            log("Finalizing group state...");
+            mdk.merge_pending_commit(&group_id)
+                .map_err(|e| JsValue::from_str(&format!("Failed to merge commit: {}", e)))?;
 
             // Disconnect
             let _ = client.disconnect().await;
@@ -995,6 +985,12 @@ pub fn send_message_to_group(group_id_hex: String, message_content: String) -> j
             client.send_event(&message_event).await
                 .map_err(|e| JsValue::from_str(&format!("Failed to send event: {}", e)))?;
             log("  ✓ Message event published");
+
+            // Merge pending commit to finalize our state
+            log("  Finalizing message state...");
+            mdk.merge_pending_commit(&group_id)
+                .map_err(|e| JsValue::from_str(&format!("Failed to merge commit: {}", e)))?;
+            log("  ✓ State finalized");
 
             // Disconnect
             let _ = client.disconnect().await;
