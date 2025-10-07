@@ -221,20 +221,20 @@
 
     <!-- Create Group Modal -->
     <div id="create-group-modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000;">
-        <div style="background: white; max-width: 600px; margin: 50px auto; padding: 30px; border-radius: 8px;">
+        <div style="background: white; max-width: 500px; margin: 100px auto; padding: 30px; border-radius: 8px;">
             <h2>➕ Create New Group</h2>
             <div style="margin: 20px 0;">
                 <label style="display: block; margin-bottom: 5px; font-weight: bold;">Group Name:</label>
                 <input type="text" id="create-group-name" placeholder="My Group" style="width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 4px;">
             </div>
             <div style="margin: 20px 0;">
-                <label style="display: block; margin-bottom: 5px; font-weight: bold;">Description:</label>
-                <textarea id="create-group-description" placeholder="Optional description" style="width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 4px; min-height: 80px;"></textarea>
+                <label style="display: block; margin-bottom: 5px; font-weight: bold;">Description (optional):</label>
+                <textarea id="create-group-description" placeholder="What's this group about?" style="width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 4px; min-height: 60px;"></textarea>
             </div>
             <div style="margin: 20px 0;">
-                <label style="display: block; margin-bottom: 10px; font-weight: bold;">Invite Members (npubs, one per line):</label>
-                <textarea id="create-group-members" placeholder="npub1abc...&#10;npub1xyz..." style="width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 4px; min-height: 120px; font-family: monospace; font-size: 0.9em;"></textarea>
-                <p style="font-size: 0.9em; color: #666; margin-top: 5px;">Add npubs of people to invite (optional - you can invite them later)</p>
+                <label style="display: block; margin-bottom: 5px; font-weight: bold;">First member to invite:</label>
+                <input type="text" id="create-group-first-member" placeholder="npub1..." style="width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 4px; font-family: monospace; font-size: 0.9em;">
+                <p style="font-size: 0.9em; color: #666; margin-top: 5px;">Groups require you and at least 1 other member. You can invite more people later.</p>
             </div>
             <div id="create-group-status" style="margin: 20px 0; color: #0066cc;"></div>
             <div style="display: flex; gap: 10px; margin-top: 20px;">
@@ -975,7 +975,7 @@
             document.getElementById('create-group-modal').style.display = 'block';
             document.getElementById('create-group-name').value = '';
             document.getElementById('create-group-description').value = '';
-            document.getElementById('create-group-members').value = '';
+            document.getElementById('create-group-first-member').value = '';
             document.getElementById('create-group-status').innerHTML = '';
         };
 
@@ -986,10 +986,20 @@
         window.createGroup = async function() {
             const name = document.getElementById('create-group-name').value.trim();
             const description = document.getElementById('create-group-description').value.trim();
-            const membersText = document.getElementById('create-group-members').value.trim();
+            const firstMember = document.getElementById('create-group-first-member').value.trim();
 
             if (!name) {
                 alert('Please enter a group name');
+                return;
+            }
+
+            if (!firstMember) {
+                alert('Please enter at least one member to invite');
+                return;
+            }
+
+            if (!firstMember.startsWith('npub1')) {
+                alert('Invalid npub format. Must start with npub1');
                 return;
             }
 
@@ -997,25 +1007,19 @@
             statusDiv.textContent = 'Creating group...';
 
             try {
-                // Parse member npubs (one per line)
-                const memberNpubs = membersText
-                    .split('\n')
-                    .map(line => line.trim())
-                    .filter(line => line.length > 0);
+                console.log(`Creating group "${name}" with first member: ${firstMember.substring(0, 16)}...`);
 
-                console.log(`Creating group "${name}" with ${memberNpubs.length} members`);
+                // Call WASM function with first member
+                const groupId = await create_group_with_members(name, description, JSON.stringify([firstMember]));
 
-                // Call WASM function
-                const groupId = await create_group_with_members(name, description, JSON.stringify(memberNpubs));
-
-                statusDiv.innerHTML = `<div class="success">✅ Group created!</div>`;
+                statusDiv.innerHTML = `<div class="success">✅ Group created!<br><small>Use "Invite Member" to add more people.</small></div>`;
 
                 // Wait a moment then close and refresh
                 setTimeout(async () => {
                     closeCreateGroupModal();
                     await refreshGroups();
                     showSection('groups');
-                }, 1500);
+                }, 2000);
             } catch (err) {
                 console.error('Failed to create group:', err);
                 statusDiv.innerHTML = `<div class="error">Failed: ${err}</div>`;
