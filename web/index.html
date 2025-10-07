@@ -738,7 +738,7 @@
                         const npub = msg.pubkey.substring(0, 16);
                         const formattedContent = await formatMessageContent(msg.content);
                         return `
-                        <div style="margin-bottom: 10px; padding: 8px; background: white; border-radius: 4px;">
+                        <div data-message-id="${msg.id}" style="margin-bottom: 10px; padding: 8px; background: white; border-radius: 4px;">
                             <div style="font-size: 0.85em; color: #666; margin-bottom: 4px;">
                                 <strong>${npub}...</strong> • ${timestamp}
                             </div>
@@ -761,6 +761,12 @@
         async function addMessageToChat(message) {
             const chatDiv = document.getElementById('chat-messages');
 
+            // Check if message already exists (deduplicate)
+            if (chatDiv.querySelector(`[data-message-id="${message.id}"]`)) {
+                console.log(`Message ${message.id} already exists, skipping`);
+                return;
+            }
+
             // Remove "no messages" text if present
             if (chatDiv.querySelector('p')) {
                 chatDiv.innerHTML = '';
@@ -771,7 +777,7 @@
             const formattedContent = await formatMessageContent(message.content);
 
             const messageHtml = `
-            <div style="margin-bottom: 10px; padding: 8px; background: white; border-radius: 4px;">
+            <div data-message-id="${message.id}" style="margin-bottom: 10px; padding: 8px; background: white; border-radius: 4px;">
                 <div style="font-size: 0.85em; color: #666; margin-bottom: 4px;">
                     <strong>${npub}...</strong> • ${timestamp}
                 </div>
@@ -805,7 +811,9 @@
                 // Clear input
                 input.value = '';
 
-                // Message will appear via subscription when relay broadcasts it back
+                // Immediately reload messages to show the sent message
+                // (don't wait for subscription, which might have race conditions)
+                await loadMessages(currentChatGroupId);
             } catch (err) {
                 console.error('❌ Failed to send message:', err);
                 alert(`Failed to send message: ${err}`);

@@ -862,6 +862,38 @@ pub fn invite_member_to_group(group_id_hex: String, member_npub: String) -> js_s
             mdk.merge_pending_commit(&group_id)
                 .map_err(|e| JsValue::from_str(&format!("Failed to merge commit: {}", e)))?;
 
+            // Step 4: Add the new member to the admin list
+            log("Adding new member as admin...");
+
+            // Get current group data
+            let group = mdk.get_group(&group_id)
+                .map_err(|e| JsValue::from_str(&format!("Failed to get group: {}", e)))?
+                .ok_or_else(|| JsValue::from_str("Group not found"))?;
+
+            // Add the new member to admins
+            let mut new_admins: Vec<nostr::PublicKey> = group.admin_pubkeys.into_iter().collect();
+            new_admins.push(member_pubkey);
+
+            // Update group data with new admin list
+            use mdk_core::prelude::NostrGroupDataUpdate;
+            let update = NostrGroupDataUpdate {
+                admins: Some(new_admins),
+                ..Default::default()
+            };
+
+            let update_result = mdk.update_group_data(&group_id, update)
+                .map_err(|e| JsValue::from_str(&format!("Failed to update admins: {}", e)))?;
+
+            // Publish the update evolution event
+            client.send_event(&update_result.evolution_event).await
+                .map_err(|e| JsValue::from_str(&format!("Failed to publish admin update: {}", e)))?;
+
+            // Merge the update commit
+            mdk.merge_pending_commit(&group_id)
+                .map_err(|e| JsValue::from_str(&format!("Failed to merge admin update: {}", e)))?;
+
+            log("✅ Member added as admin!");
+
             // Disconnect
             let _ = client.disconnect().await;
 
