@@ -323,14 +323,21 @@ pub fn get_groups() -> js_sys::Promise {
 
             log(&format!("Found {} group(s)", groups.len()));
 
-            // Convert to JSON array
+            // Convert to JSON array with member count
             let groups_json: Vec<_> = groups.iter().map(|g| {
+                // Get member count
+                let member_count = mdk.get_members(&g.mls_group_id)
+                    .ok()
+                    .map(|members| members.len())
+                    .unwrap_or(0);
+
                 serde_json::json!({
                     "id": hex::encode(g.mls_group_id.as_slice()),
                     "name": g.name,
                     "description": g.description,
                     "image_hash": g.image_hash.map(|h| hex::encode(h)),
                     "last_message_at": g.last_message_at.map(|t| t.as_u64()),
+                    "member_count": member_count,
                 })
             }).collect();
 
