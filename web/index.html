@@ -421,7 +421,7 @@
         let wasm;
 
         // Navigation
-        window.showSection = function(sectionName, event) {
+        window.showSection = function(sectionName, event, skipHashUpdate = false) {
             // Hide all sections
             document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
             document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
@@ -448,6 +448,11 @@
             if (sectionName === 'groups') {
                 refreshGroups();
             }
+
+            // Update URL hash (unless we're restoring from hash)
+            if (!skipHashUpdate) {
+                window.location.hash = sectionName;
+            }
         };
 
         async function loadWasm() {
@@ -459,12 +464,41 @@
                 await initializeGroups();
                 document.getElementById('buttons').style.display = 'block';
                 document.getElementById('status').innerHTML = '<div class="success">✓ Ready</div>';
+
+                // Restore state from URL hash
+                await restoreFromHash();
             } catch (err) {
                 console.error('Failed to load WASM:', err);
                 document.getElementById('status').innerHTML =
                     `<div class="error">Failed to load WASM: ${err}</div>`;
             }
         }
+
+        // Restore state from URL hash
+        async function restoreFromHash() {
+            const hash = window.location.hash.slice(1); // Remove leading #
+            if (!hash) return;
+
+            if (hash.startsWith('chat:')) {
+                // Format: chat:groupId:groupName
+                const parts = hash.split(':');
+                if (parts.length >= 3) {
+                    const groupId = parts[1];
+                    const groupName = decodeURIComponent(parts.slice(2).join(':'));
+                    await openChat(groupId, groupName, true); // skipHashUpdate=true
+                }
+            } else {
+                // Regular section like 'wallet', 'groups', etc.
+                if (document.getElementById(`${hash}-section`)) {
+                    showSection(hash, null, true); // skipHashUpdate=true
+                }
+            }
+        }
+
+        // Listen for hash changes (browser back/forward)
+        window.addEventListener('hashchange', async () => {
+            await restoreFromHash();
+        });
 
         async function initializeWallet() {
             try {
@@ -561,7 +595,7 @@
         let currentChatGroupId = null;
         let currentChatGroupName = null;
 
-        window.openChat = async function(groupId, groupName) {
+        window.openChat = async function(groupId, groupName, skipHashUpdate = false) {
             console.log(`💬 Opening chat for group: ${groupName} (${groupId})`);
 
             // Store current group info
@@ -574,6 +608,11 @@
             // Update UI and show chat
             document.getElementById('chat-group-name').textContent = `💬 ${groupName}`;
             document.getElementById('chat-section').style.display = 'block';
+
+            // Update URL hash (encode groupName to handle special characters) unless we're restoring from hash
+            if (!skipHashUpdate) {
+                window.location.hash = `chat:${groupId}:${encodeURIComponent(groupName)}`;
+            }
 
             // Load messages
             await loadMessages(groupId);
