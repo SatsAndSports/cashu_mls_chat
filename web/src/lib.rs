@@ -834,12 +834,17 @@ pub fn invite_member_to_group(group_id_hex: String, member_npub: String) -> js_s
             let invite_result = mdk.add_members(&group_id, &[newest.clone()])
                 .map_err(|e| JsValue::from_str(&format!("Failed to add member: {}", e)))?;
 
-            // Step 1: Publish evolution event (Kind:445) to notify existing members
+            // Step 1: Merge the pending commit to finalize our state BEFORE publishing
+            log("Finalizing group state...");
+            mdk.merge_pending_commit(&group_id)
+                .map_err(|e| JsValue::from_str(&format!("Failed to merge commit: {}", e)))?;
+
+            // Step 2: Publish evolution event (Kind:445) to notify existing members
             log("Publishing group evolution event...");
             client.send_event(&invite_result.evolution_event).await
                 .map_err(|e| JsValue::from_str(&format!("Failed to publish evolution: {}", e)))?;
 
-            // Step 2: Publish Welcome message if any
+            // Step 3: Publish Welcome message if any
             if let Some(welcome_rumors) = invite_result.welcome_rumors {
                 log(&format!("Publishing Welcome message to {}...", &member_npub[..16]));
 
@@ -856,11 +861,6 @@ pub fn invite_member_to_group(group_id_hex: String, member_npub: String) -> js_s
             } else {
                 log(&format!("✅ Member added to group (no Welcome needed)"));
             }
-
-            // Step 3: Merge the pending commit to finalize our state
-            log("Finalizing group state...");
-            mdk.merge_pending_commit(&group_id)
-                .map_err(|e| JsValue::from_str(&format!("Failed to merge commit: {}", e)))?;
 
             // Step 4: Add the new member to the admin list
             log("Adding new member as admin...");
@@ -884,15 +884,43 @@ pub fn invite_member_to_group(group_id_hex: String, member_npub: String) -> js_s
             let update_result = mdk.update_group_data(&group_id, update)
                 .map_err(|e| JsValue::from_str(&format!("Failed to update admins: {}", e)))?;
 
+            // Merge the update commit BEFORE publishing
+            mdk.merge_pending_commit(&group_id)
+                .map_err(|e| JsValue::from_str(&format!("Failed to merge admin update: {}", e)))?;
+
             // Publish the update evolution event
             client.send_event(&update_result.evolution_event).await
                 .map_err(|e| JsValue::from_str(&format!("Failed to publish admin update: {}", e)))?;
 
-            // Merge the update commit
-            mdk.merge_pending_commit(&group_id)
-                .map_err(|e| JsValue::from_str(&format!("Failed to merge admin update: {}", e)))?;
-
             log("✅ Member added as admin!");
+
+            // Step 5: Send notification message to the group
+            log("Sending invitation notification to group...");
+            let invite_message = format!("Invited {} to the group (KeyPackage: {})", &member_npub[..16], &newest.id.to_hex()[..16]);
+
+            // Create message rumor
+            let rumor = nostr::UnsignedEvent {
+                id: None,
+                pubkey: keys.public_key(),
+                created_at: nostr::Timestamp::now(),
+                kind: Kind::GiftWrap,
+                tags: nostr::Tags::new(),
+                content: invite_message,
+            };
+
+            // Create encrypted message
+            let message_event = mdk.create_message(&group_id, rumor)
+                .map_err(|e| JsValue::from_str(&format!("Failed to create notification message: {}", e)))?;
+
+            // Merge pending commit BEFORE publishing
+            mdk.merge_pending_commit(&group_id)
+                .map_err(|e| JsValue::from_str(&format!("Failed to merge message commit: {}", e)))?;
+
+            // Publish notification message
+            client.send_event(&message_event).await
+                .map_err(|e| JsValue::from_str(&format!("Failed to send notification message: {}", e)))?;
+
+            log("✅ Notification message sent!");
 
             // Disconnect
             let _ = client.disconnect().await;
@@ -1013,16 +1041,16 @@ pub fn send_message_to_group(group_id_hex: String, message_content: String) -> j
             client.connect().await;
             log("  ✓ Connected to relays");
 
-            log("  Publishing message event...");
-            client.send_event(&message_event).await
-                .map_err(|e| JsValue::from_str(&format!("Failed to send event: {}", e)))?;
-            log("  ✓ Message event published");
-
-            // Merge pending commit to finalize our state
+            // Merge pending commit to finalize our state BEFORE publishing
             log("  Finalizing message state...");
             mdk.merge_pending_commit(&group_id)
                 .map_err(|e| JsValue::from_str(&format!("Failed to merge commit: {}", e)))?;
             log("  ✓ State finalized");
+
+            log("  Publishing message event...");
+            client.send_event(&message_event).await
+                .map_err(|e| JsValue::from_str(&format!("Failed to send event: {}", e)))?;
+            log("  ✓ Message event published");
 
             // Disconnect
             let _ = client.disconnect().await;

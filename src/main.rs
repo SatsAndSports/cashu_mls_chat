@@ -963,6 +963,75 @@ impl ChatApp {
                                         }
                                     }
 
+                                    // Add new member to admin list
+                                    tracing::info!("{} adding new member as admin", user_name_clone);
+                                    let admin_update_result = {
+                                        let mut mdk_guard = mdk.lock().unwrap();
+
+                                        // Get current group data
+                                        let group = match mdk_guard.get_group(&group_id) {
+                                            Ok(Some(g)) => g,
+                                            Ok(None) => {
+                                                tracing::error!("{} group not found when updating admins", user_name_clone);
+                                                return;
+                                            }
+                                            Err(e) => {
+                                                tracing::error!("{} failed to get group: {}", user_name_clone, e);
+                                                return;
+                                            }
+                                        };
+
+                                        // Parse the invited member's pubkey
+                                        let member_pubkey = match nostr::PublicKey::from_bech32(&npub_str) {
+                                            Ok(pk) => pk,
+                                            Err(e) => {
+                                                tracing::error!("{} failed to parse npub: {}", user_name_clone, e);
+                                                return;
+                                            }
+                                        };
+
+                                        // Add to admins
+                                        let mut new_admins: Vec<nostr::PublicKey> = group.admin_pubkeys.into_iter().collect();
+                                        new_admins.push(member_pubkey);
+
+                                        // Update group data
+                                        use mdk_core::prelude::NostrGroupDataUpdate;
+                                        let update = NostrGroupDataUpdate {
+                                            admins: Some(new_admins),
+                                            ..Default::default()
+                                        };
+
+                                        let update_result = mdk_guard.update_group_data(&group_id, update);
+
+                                        // Merge the admin update commit
+                                        if update_result.is_ok() {
+                                            if let Err(e) = mdk_guard.merge_pending_commit(&group_id) {
+                                                tracing::error!("{} failed to merge admin update commit: {}", user_name_clone, e);
+                                            } else {
+                                                tracing::info!("{} merged admin update commit", user_name_clone);
+                                            }
+                                        }
+
+                                        update_result
+                                    }; // mdk_guard is dropped here
+
+                                    // Publish admin update evolution event
+                                    match admin_update_result {
+                                        Ok(update_result) => {
+                                            match client.send_event(&update_result.evolution_event).await {
+                                                Ok(_) => {
+                                                    tracing::info!("{} published admin update event", user_name_clone);
+                                                }
+                                                Err(e) => {
+                                                    tracing::error!("{} failed to publish admin update: {}", user_name_clone, e);
+                                                }
+                                            }
+                                        }
+                                        Err(e) => {
+                                            tracing::error!("{} failed to update admins: {}", user_name_clone, e);
+                                        }
+                                    }
+
                                     add_system_message(&messages, format!("{}: ✅ Invited {} to the group! (KeyPackage: {})", user_name_clone, npub_str, &event_id[..16]));
 
                                     // Send persistent message to group
