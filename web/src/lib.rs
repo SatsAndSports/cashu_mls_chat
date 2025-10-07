@@ -1,6 +1,6 @@
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::future_to_promise;
-use nostr::{Keys, ToBech32, EventBuilder, Kind, RelayUrl};
+use nostr::{Keys, ToBech32, FromBech32, EventBuilder, Kind, RelayUrl};
 use nostr_sdk::{Client, RelayPoolNotification};
 use web_sys::{window, Storage};
 use std::sync::Arc;
@@ -674,6 +674,205 @@ pub fn create_keypackage_and_wait_for_invite() -> js_sys::Promise {
         .await;
 
         result.map(|name| JsValue::from_str(&name))
+    })
+}
+
+/// Create a new group and invite members
+/// Returns a Promise that resolves to the group ID
+#[wasm_bindgen]
+pub fn create_group_with_members(name: String, description: String, member_npubs_json: String) -> js_sys::Promise {
+    future_to_promise(async move {
+        let result = async {
+            log(&format!("📝 Creating group: {}", name));
+
+            // Parse member npubs
+            let member_npubs: Vec<String> = serde_json::from_str(&member_npubs_json)
+                .map_err(|e| JsValue::from_str(&format!("Invalid npubs JSON: {}", e)))?;
+
+            // Get our keys
+            let keys = get_keys()?;
+            let our_pubkey = keys.public_key();
+
+            // Fetch KeyPackages for each member
+            log(&format!("Fetching KeyPackages for {} member(s)...", member_npubs.len()));
+
+            let client = Client::default();
+            for relay in RELAYS {
+                if let Ok(url) = RelayUrl::parse(relay) {
+                    let _ = client.add_relay(url).await;
+                }
+            }
+            client.connect().await;
+
+            let mut key_package_events = Vec::new();
+            let mut admin_pubkeys = vec![our_pubkey]; // Creator is always admin
+
+            for npub in &member_npubs {
+                log(&format!("  Fetching KeyPackage for {}...", &npub[..16]));
+
+                // Parse npub to get public key
+                let pubkey = nostr::PublicKey::from_bech32(npub)
+                    .map_err(|e| JsValue::from_str(&format!("Invalid npub {}: {}", npub, e)))?;
+
+                admin_pubkeys.push(pubkey);
+
+                // Query for their most recent KeyPackage (kind 443)
+                let filter = nostr::Filter::new()
+                    .kind(Kind::Custom(443))
+                    .author(pubkey)
+                    .limit(10);  // Get last 10, we'll pick the newest
+
+                let events = client.fetch_events(filter, Duration::from_secs(10)).await
+                    .map_err(|e| JsValue::from_str(&format!("Failed to fetch KeyPackages for {}: {}", npub, e)))?;
+
+                if events.is_empty() {
+                    return Err(JsValue::from_str(&format!("No KeyPackage found for {}", npub)));
+                }
+
+                // Get the newest KeyPackage
+                let newest = events.iter()
+                    .max_by_key(|e| e.created_at)
+                    .unwrap();
+
+                log(&format!("    ✓ Found KeyPackage: {}", newest.id.to_hex()));
+                key_package_events.push(newest.clone());
+            }
+
+            // Create group config
+            use mdk_core::prelude::*;
+            let relay_urls: Vec<RelayUrl> = RELAYS
+                .iter()
+                .filter_map(|r| RelayUrl::parse(r).ok())
+                .collect();
+
+            let config = NostrGroupConfigData::new(
+                name.clone(),
+                description,
+                None,  // image
+                None,  // banner
+                None,  // website
+                relay_urls,
+                admin_pubkeys,
+            );
+
+            // Create MDK and create the group
+            log("Creating group with MDK...");
+            let mdk = create_mdk().await?;
+
+            let group_result = mdk.create_group(&our_pubkey, key_package_events, config)
+                .map_err(|e| JsValue::from_str(&format!("Failed to create group: {}", e)))?;
+
+            let group_id = hex::encode(group_result.group.mls_group_id.as_slice());
+            log(&format!("✅ Group created! ID: {}", &group_id[..16]));
+
+            // Publish Welcome messages to each invited member
+            log(&format!("Publishing {} Welcome message(s)...", group_result.welcome_rumors.len()));
+
+            for welcome_unsigned in group_result.welcome_rumors {
+                // Sign the UnsignedEvent
+                let welcome_event = welcome_unsigned.sign(&keys).await
+                    .map_err(|e| JsValue::from_str(&format!("Failed to sign Welcome: {}", e)))?;
+
+                client.send_event(&welcome_event).await
+                    .map_err(|e| JsValue::from_str(&format!("Failed to send Welcome: {}", e)))?;
+            }
+
+            log(&format!("✅ All Welcome messages published!"));
+
+            // Disconnect
+            let _ = client.disconnect().await;
+
+            Ok::<String, JsValue>(group_id)
+        }
+        .await;
+
+        result.map(|group_id| JsValue::from_str(&group_id))
+    })
+}
+
+/// Invite a member to an existing group by their npub
+/// Returns a Promise that resolves when the invite is sent
+#[wasm_bindgen]
+pub fn invite_member_to_group(group_id_hex: String, member_npub: String) -> js_sys::Promise {
+    future_to_promise(async move {
+        let result = async {
+            log(&format!("👋 Inviting {} to group {}", &member_npub[..16], &group_id_hex[..16]));
+
+            // Parse npub to get public key
+            let member_pubkey = nostr::PublicKey::from_bech32(&member_npub)
+                .map_err(|e| JsValue::from_str(&format!("Invalid npub: {}", e)))?;
+
+            // Parse group ID
+            let group_id_bytes = hex::decode(&group_id_hex)
+                .map_err(|e| JsValue::from_str(&format!("Invalid group ID: {}", e)))?;
+            let group_id = mdk_core::prelude::GroupId::from_slice(&group_id_bytes);
+
+            // Fetch member's KeyPackage
+            log(&format!("Fetching KeyPackage for {}...", &member_npub[..16]));
+
+            let client = Client::default();
+            for relay in RELAYS {
+                if let Ok(url) = RelayUrl::parse(relay) {
+                    let _ = client.add_relay(url).await;
+                }
+            }
+            client.connect().await;
+
+            let filter = nostr::Filter::new()
+                .kind(Kind::Custom(443))
+                .author(member_pubkey)
+                .limit(10);
+
+            let events = client.fetch_events(filter, Duration::from_secs(10)).await
+                .map_err(|e| JsValue::from_str(&format!("Failed to fetch KeyPackage: {}", e)))?;
+
+            if events.is_empty() {
+                return Err(JsValue::from_str(&format!("No KeyPackage found for {}. They may need to create one first.", &member_npub[..16])));
+            }
+
+            // Get the newest KeyPackage
+            let newest = events.iter()
+                .max_by_key(|e| e.created_at)
+                .unwrap();
+
+            log(&format!("  ✓ Found KeyPackage: {}", newest.id.to_hex()));
+
+            // Get our keys
+            let keys = get_keys()?;
+
+            // Create MDK and add member to group
+            log("Adding member to group...");
+            let mdk = create_mdk().await?;
+
+            let invite_result = mdk.add_members(&group_id, &[newest.clone()])
+                .map_err(|e| JsValue::from_str(&format!("Failed to add member: {}", e)))?;
+
+            // Publish Welcome message if any
+            if let Some(welcome_rumors) = invite_result.welcome_rumors {
+                log(&format!("Publishing Welcome message to {}...", &member_npub[..16]));
+
+                for welcome_unsigned in welcome_rumors {
+                    // Sign the UnsignedEvent
+                    let welcome_event = welcome_unsigned.sign(&keys).await
+                        .map_err(|e| JsValue::from_str(&format!("Failed to sign Welcome: {}", e)))?;
+
+                    client.send_event(&welcome_event).await
+                        .map_err(|e| JsValue::from_str(&format!("Failed to send Welcome: {}", e)))?;
+                }
+
+                log(&format!("✅ Invite sent to {}!", &member_npub[..16]));
+            } else {
+                log(&format!("✅ Member added to group (no Welcome needed)"));
+            }
+
+            // Disconnect
+            let _ = client.disconnect().await;
+
+            Ok::<JsValue, JsValue>(JsValue::from_str("success"))
+        }
+        .await;
+
+        result
     })
 }
 

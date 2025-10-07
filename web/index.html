@@ -159,6 +159,7 @@
                 <h2>📱 Groups</h2>
                 <div id="groups-status">Loading groups...</div>
                 <div id="groups-list"></div>
+                <button onclick="showCreateGroupModal()">➕ Create New Group</button>
                 <button onclick="refreshGroups()">Refresh Groups</button>
                 <button onclick="processWelcomes()">Check for Invites</button>
             </div>
@@ -167,7 +168,10 @@
             <div id="chat-section" class="section" style="display: none;">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
                     <h2 id="chat-group-name">💬 Chat</h2>
-                    <button onclick="closeChat()">← Back to Groups</button>
+                    <div style="display: flex; gap: 10px;">
+                        <button onclick="showInviteModal()">➕ Invite Member</button>
+                        <button onclick="closeChat()">← Back to Groups</button>
+                    </div>
                 </div>
                 <div id="chat-messages" style="height: 400px; overflow-y: auto; border: 1px solid #ccc; padding: 10px; margin-bottom: 10px; background: #f9f9f9;">
                     <p style="color: #666;">Loading messages...</p>
@@ -211,6 +215,48 @@
             <p style="color: #666; margin: 20px 0;" id="wait-instruction">Waiting for someone to invite you to a group...</p>
             <div style="margin-top: 20px;">
                 <div style="display: inline-block; width: 40px; height: 40px; border: 4px solid #f3f3f3; border-top: 4px solid #0066cc; border-radius: 50%; animation: spin 1s linear infinite;"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Create Group Modal -->
+    <div id="create-group-modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000;">
+        <div style="background: white; max-width: 600px; margin: 50px auto; padding: 30px; border-radius: 8px;">
+            <h2>➕ Create New Group</h2>
+            <div style="margin: 20px 0;">
+                <label style="display: block; margin-bottom: 5px; font-weight: bold;">Group Name:</label>
+                <input type="text" id="create-group-name" placeholder="My Group" style="width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 4px;">
+            </div>
+            <div style="margin: 20px 0;">
+                <label style="display: block; margin-bottom: 5px; font-weight: bold;">Description:</label>
+                <textarea id="create-group-description" placeholder="Optional description" style="width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 4px; min-height: 80px;"></textarea>
+            </div>
+            <div style="margin: 20px 0;">
+                <label style="display: block; margin-bottom: 10px; font-weight: bold;">Invite Members (npubs, one per line):</label>
+                <textarea id="create-group-members" placeholder="npub1abc...&#10;npub1xyz..." style="width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 4px; min-height: 120px; font-family: monospace; font-size: 0.9em;"></textarea>
+                <p style="font-size: 0.9em; color: #666; margin-top: 5px;">Add npubs of people to invite (optional - you can invite them later)</p>
+            </div>
+            <div id="create-group-status" style="margin: 20px 0; color: #0066cc;"></div>
+            <div style="display: flex; gap: 10px; margin-top: 20px;">
+                <button onclick="createGroup()" style="flex: 1; padding: 12px; background: #0066cc; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 1em;">Create Group</button>
+                <button onclick="closeCreateGroupModal()" style="padding: 12px 30px; background: #ccc; border: none; border-radius: 4px; cursor: pointer;">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Invite Member Modal -->
+    <div id="invite-member-modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000;">
+        <div style="background: white; max-width: 500px; margin: 100px auto; padding: 30px; border-radius: 8px;">
+            <h2>➕ Invite Member to Group</h2>
+            <div style="margin: 20px 0;">
+                <label style="display: block; margin-bottom: 5px; font-weight: bold;">Member's npub:</label>
+                <input type="text" id="invite-member-npub" placeholder="npub1abc..." style="width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 4px; font-family: monospace; font-size: 0.9em;">
+                <p style="font-size: 0.9em; color: #666; margin-top: 5px;">Enter the npub of the person you want to invite</p>
+            </div>
+            <div id="invite-member-status" style="margin: 20px 0; color: #0066cc;"></div>
+            <div style="display: flex; gap: 10px; margin-top: 20px;">
+                <button onclick="inviteMember()" style="flex: 1; padding: 12px; background: #0066cc; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 1em;">Send Invite</button>
+                <button onclick="closeInviteModal()" style="padding: 12px 30px; background: #ccc; border: none; border-radius: 4px; cursor: pointer;">Cancel</button>
             </div>
         </div>
     </div>
@@ -364,6 +410,8 @@
             fetch_welcome_events,
             process_pending_welcomes,
             create_keypackage_and_wait_for_invite,
+            create_group_with_members,
+            invite_member_to_group,
             send_message_to_group,
             get_messages_for_group,
             subscribe_to_group_messages,
@@ -900,6 +948,111 @@
                 setTimeout(() => {
                     document.getElementById('wait-invite-modal').style.display = 'none';
                 }, 3000);
+            }
+        };
+
+        // Create Group Modal
+        window.showCreateGroupModal = function() {
+            document.getElementById('create-group-modal').style.display = 'block';
+            document.getElementById('create-group-name').value = '';
+            document.getElementById('create-group-description').value = '';
+            document.getElementById('create-group-members').value = '';
+            document.getElementById('create-group-status').innerHTML = '';
+        };
+
+        window.closeCreateGroupModal = function() {
+            document.getElementById('create-group-modal').style.display = 'none';
+        };
+
+        window.createGroup = async function() {
+            const name = document.getElementById('create-group-name').value.trim();
+            const description = document.getElementById('create-group-description').value.trim();
+            const membersText = document.getElementById('create-group-members').value.trim();
+
+            if (!name) {
+                alert('Please enter a group name');
+                return;
+            }
+
+            const statusDiv = document.getElementById('create-group-status');
+            statusDiv.textContent = 'Creating group...';
+
+            try {
+                // Parse member npubs (one per line)
+                const memberNpubs = membersText
+                    .split('\n')
+                    .map(line => line.trim())
+                    .filter(line => line.length > 0);
+
+                console.log(`Creating group "${name}" with ${memberNpubs.length} members`);
+
+                // Call WASM function
+                const groupId = await create_group_with_members(name, description, JSON.stringify(memberNpubs));
+
+                statusDiv.innerHTML = `<div class="success">✅ Group created!</div>`;
+
+                // Wait a moment then close and refresh
+                setTimeout(async () => {
+                    closeCreateGroupModal();
+                    await refreshGroups();
+                    showSection('groups');
+                }, 1500);
+            } catch (err) {
+                console.error('Failed to create group:', err);
+                statusDiv.innerHTML = `<div class="error">Failed: ${err}</div>`;
+            }
+        };
+
+        // Invite Member Modal
+        let currentGroupIdForInvite = null;
+
+        window.showInviteModal = function() {
+            // Store the current group ID
+            currentGroupIdForInvite = currentGroupId;
+            document.getElementById('invite-member-modal').style.display = 'block';
+            document.getElementById('invite-member-npub').value = '';
+            document.getElementById('invite-member-status').innerHTML = '';
+        };
+
+        window.closeInviteModal = function() {
+            document.getElementById('invite-member-modal').style.display = 'none';
+            currentGroupIdForInvite = null;
+        };
+
+        window.inviteMember = async function() {
+            const npub = document.getElementById('invite-member-npub').value.trim();
+
+            if (!npub) {
+                alert('Please enter an npub');
+                return;
+            }
+
+            if (!npub.startsWith('npub1')) {
+                alert('Invalid npub format. Must start with npub1');
+                return;
+            }
+
+            if (!currentGroupIdForInvite) {
+                alert('No group selected');
+                return;
+            }
+
+            const statusDiv = document.getElementById('invite-member-status');
+            statusDiv.textContent = 'Sending invite...';
+
+            try {
+                // Call WASM function
+                await invite_member_to_group(currentGroupIdForInvite, npub);
+
+                statusDiv.innerHTML = `<div class="success">✅ Invite sent!</div>`;
+
+                // Wait a moment then close
+                setTimeout(() => {
+                    closeInviteModal();
+                }, 1500);
+            } catch (err) {
+                console.error('Failed to invite member:', err);
+                statusDiv.innerHTML = `<div class="error">Failed: ${err}</div>`;
             }
         };
 
