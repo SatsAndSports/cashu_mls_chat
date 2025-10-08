@@ -1360,7 +1360,26 @@ pub fn subscribe_to_group_messages(group_id_hex: String, callback: js_sys::Funct
                                         }
                                     }
                                     Err(e) => {
-                                        log(&format!("  ⚠️  Failed to process message: {}", e));
+                                        use mdk_core::error::Error;
+
+                                        // Check if this is an epoch conflict
+                                        if matches!(e, Error::ProcessMessageWrongEpoch) {
+                                            log(&format!("  ⚠️  EPOCH CONFLICT DETECTED: Another group member's action was processed first"));
+                                            log(&format!("     Event ID: {}", event.id.to_hex()));
+                                            log(&format!("     Your local state may have diverged from the group"));
+
+                                            // Show user-friendly modal
+                                            if let Some(window) = web_sys::window() {
+                                                let _ = window.alert_with_message(
+                                                    "⚠️ Group Conflict Detected\n\n\
+                                                    Another group member performed an action at the same time as you.\n\
+                                                    Their action was processed first.\n\n\
+                                                    Please try your action again (send message, invite member, etc.)."
+                                                );
+                                            }
+                                        } else {
+                                            log(&format!("  ⚠️  Failed to process message: {}", e));
+                                        }
                                     }
                                 }
                             }
