@@ -316,6 +316,10 @@ pub fn get_groups() -> js_sys::Promise {
         let result = async {
             log("Fetching groups from MDK...");
 
+            // Get current user's public key
+            let keys = get_keys()?;
+            let current_user_pubkey = keys.public_key();
+
             let mdk = create_mdk().await?;
             let groups = mdk
                 .get_groups()
@@ -323,13 +327,21 @@ pub fn get_groups() -> js_sys::Promise {
 
             log(&format!("Found {} group(s)", groups.len()));
 
-            // Convert to JSON array with member count
+            // Convert to JSON array with member count and admin info
             let groups_json: Vec<_> = groups.iter().map(|g| {
                 // Get member count
                 let member_count = mdk.get_members(&g.mls_group_id)
                     .ok()
                     .map(|members| members.len())
                     .unwrap_or(0);
+
+                // Check if current user is an admin
+                let is_admin = g.admin_pubkeys.contains(&current_user_pubkey);
+
+                // Convert admin pubkeys to npubs
+                let admin_npubs: Vec<String> = g.admin_pubkeys.iter()
+                    .filter_map(|pk| pk.to_bech32().ok())
+                    .collect();
 
                 serde_json::json!({
                     "id": hex::encode(g.mls_group_id.as_slice()),
@@ -338,6 +350,8 @@ pub fn get_groups() -> js_sys::Promise {
                     "image_hash": g.image_hash.map(|h| hex::encode(h)),
                     "last_message_at": g.last_message_at.map(|t| t.as_u64()),
                     "member_count": member_count,
+                    "is_admin": is_admin,
+                    "admin_npubs": admin_npubs,
                 })
             }).collect();
 
