@@ -74,7 +74,60 @@ async fn create_connected_client() -> Result<Client, JsValue> {
     Ok(client)
 }
 
+/// Get current mint URL from localStorage, or use default
+fn get_current_mint_url() -> Result<String, JsValue> {
+    let storage = get_local_storage()?;
+
+    // Try to get current mint from localStorage
+    if let Ok(Some(mint_url)) = storage.get_item("current_mint_url") {
+        return Ok(mint_url);
+    }
+
+    // Default mint if none set
+    let default_mint = "https://nofees.testnut.cashu.space".to_string();
+
+    // Save default as current mint
+    storage.set_item("current_mint_url", &default_mint)?;
+
+    Ok(default_mint)
+}
+
+/// Helper function to create a wallet for a specific mint URL
+async fn create_wallet_for_mint(mint_url_str: String) -> Result<Wallet, JsValue> {
+    // Get Nostr keys from localStorage
+    let storage = get_local_storage()?;
+    let secret_hex = storage
+        .get_item("nostr_secret_key")?
+        .ok_or_else(|| JsValue::from_str("No keys found in localStorage"))?;
+
+    let keys = Keys::parse(&secret_hex)
+        .map_err(|e| JsValue::from_str(&format!("Failed to parse keys: {}", e)))?;
+
+    // Create seed from Nostr secret key
+    let mut seed = [0u8; 64];
+    seed[..32].copy_from_slice(keys.secret_key().as_secret_bytes());
+
+    // Parse the provided mint URL
+    let mint_url = MintUrl::from_str(&mint_url_str)
+        .map_err(|e| JsValue::from_str(&format!("Invalid mint URL: {}", e)))?;
+
+    // Create hybrid database (loads from localStorage - shared across all mints)
+    let db = HybridWalletDatabase::new().await?;
+
+    // Build wallet
+    let wallet = WalletBuilder::new()
+        .mint_url(mint_url)
+        .unit(CurrencyUnit::Sat)
+        .localstore(Arc::new(db))
+        .seed(seed)
+        .build()
+        .map_err(|e| JsValue::from_str(&format!("Failed to build wallet: {}", e)))?;
+
+    Ok(wallet)
+}
+
 /// Helper function to create a wallet from stored keys and database
+/// Uses the current mint URL from localStorage
 async fn create_wallet() -> Result<Wallet, JsValue> {
     // Get Nostr keys from localStorage
     let storage = get_local_storage()?;
@@ -89,8 +142,9 @@ async fn create_wallet() -> Result<Wallet, JsValue> {
     let mut seed = [0u8; 64];
     seed[..32].copy_from_slice(keys.secret_key().as_secret_bytes());
 
-    // Create mint URL
-    let mint_url = MintUrl::from_str("https://nofees.testnut.cashu.space")
+    // Get current mint URL from localStorage
+    let mint_url_str = get_current_mint_url()?;
+    let mint_url = MintUrl::from_str(&mint_url_str)
         .map_err(|e| JsValue::from_str(&format!("Invalid mint URL: {}", e)))?;
 
     // Create hybrid database (loads from localStorage)
@@ -181,6 +235,124 @@ pub fn clear_keys() -> Result<(), JsValue> {
     storage.remove_item("mdk_state")?;
     log("Cleared Nostr keys and MDK state (wallet preserved)");
     Ok(())
+}
+
+// ============================================================================
+// Trusted Mints Management
+// ============================================================================
+
+/// Get list of trusted mint URLs
+/// Returns JSON array of strings
+#[wasm_bindgen]
+pub fn get_trusted_mints() -> Result<String, JsValue> {
+    let storage = get_local_storage()?;
+
+    let mints_json = storage
+        .get_item("trusted_mints")?
+        .unwrap_or_else(|| "[]".to_string());
+
+    Ok(mints_json)
+}
+
+/// Add a mint to the trusted list
+/// Returns true if added, false if already in list
+#[wasm_bindgen]
+pub fn add_trusted_mint(mint_url: String) -> Result<bool, JsValue> {
+    let storage = get_local_storage()?;
+
+    // Validate mint URL
+    MintUrl::from_str(&mint_url)
+        .map_err(|e| JsValue::from_str(&format!("Invalid mint URL: {}", e)))?;
+
+    // Load current list
+    let mints_json = storage
+        .get_item("trusted_mints")?
+        .unwrap_or_else(|| "[]".to_string());
+
+    let mut mints: Vec<String> = serde_json::from_str(&mints_json)
+        .map_err(|e| JsValue::from_str(&format!("Failed to parse trusted mints: {}", e)))?;
+
+    // Check if already in list
+    if mints.contains(&mint_url) {
+        return Ok(false);
+    }
+
+    // Add to list
+    mints.push(mint_url);
+
+    // Save back to localStorage
+    let updated_json = serde_json::to_string(&mints)
+        .map_err(|e| JsValue::from_str(&format!("Failed to serialize mints: {}", e)))?;
+
+    storage.set_item("trusted_mints", &updated_json)?;
+
+    Ok(true)
+}
+
+/// Remove a mint from the trusted list
+/// Returns true if removed, false if not in list
+#[wasm_bindgen]
+pub fn remove_trusted_mint(mint_url: String) -> Result<bool, JsValue> {
+    let storage = get_local_storage()?;
+
+    // Load current list
+    let mints_json = storage
+        .get_item("trusted_mints")?
+        .unwrap_or_else(|| "[]".to_string());
+
+    let mut mints: Vec<String> = serde_json::from_str(&mints_json)
+        .map_err(|e| JsValue::from_str(&format!("Failed to parse trusted mints: {}", e)))?;
+
+    // Find and remove
+    let initial_len = mints.len();
+    mints.retain(|m| m != &mint_url);
+
+    if mints.len() == initial_len {
+        return Ok(false); // Not found
+    }
+
+    // Save back to localStorage
+    let updated_json = serde_json::to_string(&mints)
+        .map_err(|e| JsValue::from_str(&format!("Failed to serialize mints: {}", e)))?;
+
+    storage.set_item("trusted_mints", &updated_json)?;
+
+    Ok(true)
+}
+
+/// Check if a mint URL is in the trusted list
+#[wasm_bindgen]
+pub fn is_mint_trusted(mint_url: String) -> Result<bool, JsValue> {
+    let storage = get_local_storage()?;
+
+    let mints_json = storage
+        .get_item("trusted_mints")?
+        .unwrap_or_else(|| "[]".to_string());
+
+    let mints: Vec<String> = serde_json::from_str(&mints_json)
+        .map_err(|e| JsValue::from_str(&format!("Failed to parse trusted mints: {}", e)))?;
+
+    Ok(mints.contains(&mint_url))
+}
+
+/// Set the current mint URL (for wallet operations)
+#[wasm_bindgen]
+pub fn set_current_mint(mint_url: String) -> Result<(), JsValue> {
+    let storage = get_local_storage()?;
+
+    // Validate mint URL
+    MintUrl::from_str(&mint_url)
+        .map_err(|e| JsValue::from_str(&format!("Invalid mint URL: {}", e)))?;
+
+    storage.set_item("current_mint_url", &mint_url)?;
+
+    Ok(())
+}
+
+/// Get the current mint URL
+#[wasm_bindgen]
+pub fn get_current_mint() -> Result<String, JsValue> {
+    get_current_mint_url()
 }
 
 /// Log to browser console (for debugging)
@@ -374,8 +546,72 @@ pub fn get_balance() -> js_sys::Promise {
     })
 }
 
+/// Get balances for all mints in the wallet database
+/// Returns a Promise that resolves to JSON array of {mint: string, balance: number, is_trusted: bool}
+/// Sorted by descending balance
+#[wasm_bindgen]
+pub fn get_all_mint_balances() -> js_sys::Promise {
+    future_to_promise(async move {
+        let result = async {
+            use std::collections::HashMap;
+            use cdk_common::database::WalletDatabase;
+            use cdk::nuts::State;
+
+            log("Fetching balances for all mints...");
+
+            // Create database to access proofs
+            let db = HybridWalletDatabase::new().await?;
+
+            // Get all unspent proofs (State::Unspent)
+            let proofs = db.get_proofs(None, Some(CurrencyUnit::Sat), Some(vec![State::Unspent]), None)
+                .await
+                .map_err(|e| JsValue::from_str(&format!("Failed to get proofs: {}", e)))?;
+
+            // Group by mint URL and sum amounts
+            let mut balances: HashMap<String, u64> = HashMap::new();
+            for proof in proofs {
+                let mint_str = proof.mint_url.to_string();
+                *balances.entry(mint_str).or_insert(0) += u64::from(proof.proof.amount);
+            }
+
+            // Convert to sorted JSON array
+            #[derive(Serialize)]
+            struct MintBalance {
+                mint: String,
+                balance: u64,
+                is_trusted: bool,
+            }
+
+            let mut mint_balances: Vec<MintBalance> = balances
+                .into_iter()
+                .map(|(mint, balance)| {
+                    let is_trusted = is_mint_trusted(mint.clone()).unwrap_or(false);
+                    MintBalance {
+                        mint,
+                        balance,
+                        is_trusted,
+                    }
+                })
+                .collect();
+
+            // Sort by descending balance
+            mint_balances.sort_by(|a, b| b.balance.cmp(&a.balance));
+
+            let json = serde_json::to_string(&mint_balances)
+                .map_err(|e| JsValue::from_str(&format!("Failed to serialize: {}", e)))?;
+
+            log(&format!("Found balances for {} mint(s)", mint_balances.len()));
+
+            Ok::<String, JsValue>(json)
+        }
+        .await;
+
+        result.map(|json| JsValue::from_str(&json))
+    })
+}
+
 /// Parse token information without receiving it
-/// Returns a Promise that resolves to JSON with token info
+/// Returns a Promise that resolves to JSON with token info including trust status
 #[wasm_bindgen]
 pub fn parse_token_info(token_str: String) -> js_sys::Promise {
     future_to_promise(async move {
@@ -392,16 +628,22 @@ pub fn parse_token_info(token_str: String) -> js_sys::Promise {
             let mint_url = token.mint_url()
                 .map_err(|e| JsValue::from_str(&format!("Failed to get mint URL: {}", e)))?;
 
+            // Check if mint is trusted
+            let mint_str = mint_url.to_string();
+            let is_trusted = is_mint_trusted(mint_str.clone())?;
+
             // Create JSON response
             #[derive(Serialize)]
             struct TokenInfo {
                 amount: u64,
                 mint: String,
+                is_trusted: bool,
             }
 
             let info = TokenInfo {
                 amount: u64::from(amount),
-                mint: mint_url.to_string(),
+                mint: mint_str,
+                is_trusted,
             };
 
             let json = serde_json::to_string(&info)
@@ -417,20 +659,24 @@ pub fn parse_token_info(token_str: String) -> js_sys::Promise {
 
 /// Receive ecash token
 /// Returns a Promise that resolves to the amount received
+/// Creates a wallet for the token's mint (not the current mint)
 #[wasm_bindgen]
 pub fn receive_token(token_str: String) -> js_sys::Promise {
     future_to_promise(async move {
         let result = async {
             log(&format!("Receiving token: {}", &token_str[..20.min(token_str.len())]));
 
-            // Parse token to validate it
-            let _token = Token::from_str(&token_str)
+            // Parse token to get its mint URL
+            let token = Token::from_str(&token_str)
                 .map_err(|e| JsValue::from_str(&format!("Invalid token: {}", e)))?;
 
-            log(&format!("Token parsed, attempting to receive..."));
+            let token_mint_url = token.mint_url()
+                .map_err(|e| JsValue::from_str(&format!("Failed to get mint URL: {}", e)))?;
 
-            // Create wallet (loads from localStorage)
-            let wallet = create_wallet().await?;
+            log(&format!("Token is from mint: {}", token_mint_url));
+
+            // Create wallet for the TOKEN'S mint (not current mint)
+            let wallet = create_wallet_for_mint(token_mint_url.to_string()).await?;
 
             // Receive the token
             let amount = wallet
