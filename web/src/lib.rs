@@ -7,6 +7,8 @@ use std::sync::Arc;
 use std::str::FromStr;
 use std::time::Duration;
 use serde::Serialize;
+use once_cell::sync::Lazy;
+use tokio::sync::Mutex as TokioMutex;
 
 mod wallet_db;
 use wallet_db::HybridWalletDatabase;
@@ -21,9 +23,30 @@ use cdk::mint_url::MintUrl;
 use mdk_core::MDK;
 use mdk_storage_traits::GroupId;
 
+/// Global storage cache - loaded once per browser session
+static STORAGE_CACHE: Lazy<TokioMutex<Option<MdkHybridStorage>>> =
+    Lazy::new(|| TokioMutex::new(None));
+
+/// Get or create cached storage instance
+async fn get_or_create_storage() -> Result<MdkHybridStorage, JsValue> {
+    let mut cache = STORAGE_CACHE.lock().await;
+
+    if let Some(storage) = cache.as_ref() {
+        // Return a clone of the cached storage (cheap - uses Arc internally)
+        return Ok(storage.clone());
+    }
+
+    // First access this session - load from localStorage
+    log("📦 Loading storage from localStorage (first access this session)");
+    let storage = MdkHybridStorage::new().await?;
+    *cache = Some(storage.clone());
+    log("✅ Storage cached for session");
+    Ok(storage)
+}
+
 /// Helper function to create MDK instance
 async fn create_mdk() -> Result<MDK<MdkHybridStorage>, JsValue> {
-    let storage = MdkHybridStorage::new().await?;
+    let storage = get_or_create_storage().await?;
     Ok(MDK::new(storage))
 }
 

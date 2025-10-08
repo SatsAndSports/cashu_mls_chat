@@ -142,7 +142,28 @@ impl MdkState {
 #[derive(Debug)]
 pub struct MdkHybridStorage {
     state: Arc<Mutex<MdkState>>,
+    // Note: openmls_storage is NOT Arc because it needs mutable access
+    // and MemoryStorage doesn't implement Clone. However, the MLS key data
+    // is typically much smaller than message data, so not caching it is acceptable.
     openmls_storage: MemoryStorage,
+}
+
+// Implement Clone manually since MemoryStorage doesn't implement Clone
+impl Clone for MdkHybridStorage {
+    fn clone(&self) -> Self {
+        // Clone the state Arc (cheap - just increments refcount)
+        let state = Arc::clone(&self.state);
+
+        // Reload openmls_storage from localStorage
+        // This is acceptable because MLS encryption keys are much smaller than message data
+        let openmls_storage = Self::load_openmls_storage()
+            .expect("Failed to reload openmls_storage when cloning");
+
+        Self {
+            state,
+            openmls_storage,
+        }
+    }
 }
 
 impl MdkHybridStorage {

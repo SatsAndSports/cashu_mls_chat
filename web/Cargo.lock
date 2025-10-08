@@ -2156,6 +2156,7 @@ dependencies = [
  "mdk-storage-traits",
  "nostr",
  "nostr-sdk",
+ "once_cell",
  "openmls",
  "openmls_memory_storage",
  "serde",
