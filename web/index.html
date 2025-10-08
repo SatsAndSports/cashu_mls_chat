@@ -306,7 +306,7 @@
                 </div>
                 <div style="display: flex; gap: 10px;">
                     <input type="text" id="chat-input" placeholder="Type a message..." style="flex: 1; padding: 10px; border: 1px solid #ccc; border-radius: 4px;">
-                    <button onclick="sendChatMessage()" style="padding: 10px 20px;">Send</button>
+                    <button id="send-button" onclick="sendChatMessage()" style="padding: 10px 20px;">Send</button>
                 </div>
             </div>
 
@@ -734,7 +734,10 @@
         }
 
         async function initializeGroups() {
+            // Disable chat input during initial load
+            setChatInputEnabled(false);
             await refreshGroups(); // Now auto-subscribes
+            // Note: chat input will be re-enabled when openChat() -> loadMessages() completes
         }
 
         window.refreshGroups = async function(autoSubscribe = true) {
@@ -967,6 +970,9 @@
 
         async function loadMessages(groupId) {
             try {
+                // Disable chat input while loading
+                setChatInputEnabled(false);
+
                 document.getElementById('chat-messages').innerHTML = '<p style="color: #666;">Loading messages...</p>';
 
                 const messagesJson = await get_messages_for_group(groupId);
@@ -997,10 +1003,16 @@
 
                 // Scroll to bottom
                 chatDiv.scrollTop = chatDiv.scrollHeight;
+
+                // Re-enable chat input after loading complete
+                setChatInputEnabled(true);
             } catch (err) {
                 console.error('❌ Failed to load messages:', err);
                 document.getElementById('chat-messages').innerHTML =
                     `<p style="color: red;">Failed to load messages: ${err}</p>`;
+
+                // Re-enable chat input even on error
+                setChatInputEnabled(true);
             }
         }
 
@@ -1036,8 +1048,41 @@
             chatDiv.scrollTop = chatDiv.scrollHeight;
         }
 
+        // Helper functions to enable/disable chat input
+        function setChatInputEnabled(enabled) {
+            const input = document.getElementById('chat-input');
+            const button = document.getElementById('send-button');
+
+            if (input && button) {
+                if (enabled) {
+                    input.removeAttribute('data-disabled');
+                    input.style.opacity = '1';
+                    input.style.cursor = 'text';
+                    input.style.backgroundColor = '';
+                    button.disabled = false;
+                    button.style.opacity = '1';
+                    button.style.cursor = 'pointer';
+                } else {
+                    // Don't use disabled=true to keep focus and prevent Quick Find
+                    input.setAttribute('data-disabled', 'true');
+                    input.style.opacity = '0.5';
+                    input.style.cursor = 'not-allowed';
+                    input.style.backgroundColor = '#f5f5f5';
+                    button.disabled = true;
+                    button.style.opacity = '0.5';
+                    button.style.cursor = 'not-allowed';
+                }
+            }
+        }
+
         window.sendChatMessage = async function() {
             const input = document.getElementById('chat-input');
+
+            // Check if input is logically disabled
+            if (input.hasAttribute('data-disabled')) {
+                return;
+            }
+
             const message = input.value.trim();
 
             if (!message) {
@@ -1051,6 +1096,10 @@
 
             try {
                 console.log(`📤 Sending message: "${message}"`);
+
+                // Disable input while sending
+                setChatInputEnabled(false);
+
                 await send_message_to_group(currentChatGroupId, message);
                 console.log('✅ Message sent');
 
@@ -1060,9 +1109,18 @@
                 // Immediately reload messages to show the sent message
                 // (don't wait for subscription, which might have race conditions)
                 await loadMessages(currentChatGroupId);
+
+                // Re-enable input
+                setChatInputEnabled(true);
+
+                // Keep keyboard visible on mobile by refocusing
+                input.focus();
             } catch (err) {
                 console.error('❌ Failed to send message:', err);
                 alert(`Failed to send message: ${err}`);
+
+                // Re-enable input even on error
+                setChatInputEnabled(true);
             }
         };
 
@@ -1071,8 +1129,19 @@
             const chatInput = document.getElementById('chat-input');
             if (chatInput) {
                 chatInput.addEventListener('keypress', (e) => {
-                    if (e.key === 'Enter') {
+                    if (e.key === 'Enter' && !chatInput.hasAttribute('data-disabled')) {
                         sendChatMessage();
+                    }
+                });
+
+                // Prevent typing when logically disabled (but keep focus to prevent Quick Find)
+                chatInput.addEventListener('keydown', (e) => {
+                    if (chatInput.hasAttribute('data-disabled')) {
+                        // Allow navigation keys, but prevent typing
+                        const allowedKeys = ['Tab', 'Escape', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'];
+                        if (!allowedKeys.includes(e.key)) {
+                            e.preventDefault();
+                        }
                     }
                 });
             }
