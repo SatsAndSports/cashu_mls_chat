@@ -568,6 +568,13 @@
                     listDiv.innerHTML = '<p style="color: #666;">No groups yet. Accept an invite to get started!</p>';
                     document.getElementById('groups-status').innerHTML = '<div class="success">✓ Ready (0 groups)</div>';
                 } else {
+                    // Sort by most recent activity (last_message_at), most recent first
+                    groups.sort((a, b) => {
+                        const aTime = a.last_message_at || 0;
+                        const bTime = b.last_message_at || 0;
+                        return bTime - aTime; // Descending order (newest first)
+                    });
+
                     listDiv.innerHTML = groups.map(group => {
                         console.log(`  Rendering group: ${group.name || 'Unnamed'} (ID: ${group.id})`);
                         const lastMessage = group.last_message_at
