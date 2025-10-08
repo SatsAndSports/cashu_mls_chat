@@ -106,12 +106,13 @@
             margin: 10px 0;
         }
         .group-item {
-            padding: 10px;
+            padding: 12px;
             background: #f5f5f5;
-            margin: 5px 0;
+            margin: 8px 0;
             border-radius: 4px;
             cursor: pointer;
             transition: background 0.2s;
+            min-height: 80px;
         }
         .group-item:hover {
             background: #e6e6e6;
@@ -797,13 +798,44 @@
                         return bTime - aTime; // Descending order (newest first)
                     });
 
-                    listDiv.innerHTML = groups.map(group => {
+                    // Fetch last message for each group to show preview
+                    const groupsWithPreviews = await Promise.all(groups.map(async (group) => {
+                        let messagePreview = '';
+                        // Check if group has any messages (using last_message_at instead of last_message_id)
+                        console.log(`Fetching preview for group ${group.name}, has last_message_at: ${!!group.last_message_at}`);
+                        if (group.last_message_at) {
+                            try {
+                                const messagesJson = await get_messages_for_group(group.id);
+                                const messages = JSON.parse(messagesJson);
+                                console.log(`  Group ${group.name} has ${messages.length} messages`);
+                                if (messages.length > 0) {
+                                    // Get the last message (most recent)
+                                    const lastMsg = messages[messages.length - 1];
+                                    const content = lastMsg.content || '';
+                                    console.log(`  Last message content: "${content}"`);
+                                    // Truncate to 50 chars and strip any special commands
+                                    const truncated = content.length > 50 ? content.substring(0, 50) + '...' : content;
+                                    messagePreview = truncated;
+                                    console.log(`  Preview set to: "${messagePreview}"`);
+                                }
+                            } catch (err) {
+                                console.error('Failed to fetch message preview:', err);
+                            }
+                        }
+                        return { ...group, messagePreview };
+                    }));
+
+                    listDiv.innerHTML = groupsWithPreviews.map(group => {
                         console.log(`  Rendering group: ${group.name || 'Unnamed'} (ID: ${group.id})`);
                         const lastMessage = group.last_message_at
                             ? new Date(group.last_message_at * 1000).toLocaleString()
                             : 'No messages yet';
                         const memberCount = group.member_count || 0;
                         const adminBadge = group.is_admin ? '<span style="color: #ffa500; font-size: 0.8em; margin-left: 5px;">👑 Admin</span>' : '';
+                        const preview = group.messagePreview
+                            ? `<div style="color: #888; font-size: 0.9em; margin-top: 4px; font-style: italic;">${group.messagePreview}</div>`
+                            : '';
+                        console.log(`  Rendering group ${group.name}: messagePreview="${group.messagePreview}", preview HTML length=${preview.length}`);
                         return `
                         <div class="group-item" onclick="openChat('${group.id}', '${(group.name || 'Unnamed Group').replace(/'/g, "\\'")}', ${group.is_admin})" style="cursor: pointer; padding: 15px; border-bottom: 1px solid #eee; transition: background 0.2s;" onmouseover="this.style.background='#f5f5f5'" onmouseout="this.style.background='white'">
                             <div>
@@ -811,7 +843,7 @@
                                 <span style="color: #666; font-size: 0.9em; margin-left: 10px;">👥 ${memberCount} member${memberCount !== 1 ? 's' : ''}</span>
                                 <br>
                                 <small style="color: #666;">${group.description || 'No description'}</small><br>
-                                <small style="color: #999;">Last activity: ${lastMessage}</small>
+                                <small style="color: #999;">Last activity: ${lastMessage}</small>${preview}
                             </div>
                         </div>`;
                     }).join('');
