@@ -584,6 +584,41 @@
             overlay.classList.remove('active');
         };
 
+        // Swipe to close sidebar on mobile
+        let touchStartX = 0;
+        let touchStartY = 0;
+        let touchEndX = 0;
+        let touchEndY = 0;
+
+        window.addEventListener('DOMContentLoaded', () => {
+            const sidebar = document.getElementById('sidebar');
+
+            sidebar.addEventListener('touchstart', (e) => {
+                touchStartX = e.changedTouches[0].screenX;
+                touchStartY = e.changedTouches[0].screenY;
+            });
+
+            sidebar.addEventListener('touchend', (e) => {
+                touchEndX = e.changedTouches[0].screenX;
+                touchEndY = e.changedTouches[0].screenY;
+                handleSwipe();
+            });
+
+            function handleSwipe() {
+                const diffX = touchStartX - touchEndX;
+                const diffY = touchStartY - touchEndY;
+
+                // Only detect horizontal swipes (more horizontal than vertical)
+                if (Math.abs(diffX) > Math.abs(diffY)) {
+                    // Swipe left (to close) - need at least 50px movement
+                    // diffX > 0 means swiped left (start was right of end)
+                    if (diffX > 50) {
+                        closeSidebar();
+                    }
+                }
+            }
+        });
+
         // Navigation
         window.showSection = function(sectionName, event, skipHashUpdate = false) {
             // Close sidebar on mobile when navigating
