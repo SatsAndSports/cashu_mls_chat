@@ -38,6 +38,19 @@ fn get_keys() -> Result<Keys, JsValue> {
         .map_err(|e| JsValue::from_str(&format!("Failed to parse keys: {}", e)))
 }
 
+/// Helper function to create a Nostr client connected to configured relays
+async fn create_connected_client() -> Result<Client, JsValue> {
+    let client = Client::default();
+    let relays = get_relays_internal()?;
+    for relay in &relays {
+        if let Ok(url) = RelayUrl::parse(relay) {
+            let _ = client.add_relay(url).await;
+        }
+    }
+    client.connect().await;
+    Ok(client)
+}
+
 /// Helper function to create a wallet from stored keys and database
 async fn create_wallet() -> Result<Wallet, JsValue> {
     // Get Nostr keys from localStorage
@@ -483,14 +496,7 @@ pub fn fetch_welcome_events() -> js_sys::Promise {
             let pubkey = keys.public_key();
 
             // Create client and connect to relays
-            let client = Client::default();
-            let relays = get_relays_internal()?;
-            for relay in &relays {
-                if let Ok(url) = RelayUrl::parse(relay) {
-                    let _ = client.add_relay(url).await;
-                }
-            }
-            client.connect().await;
+            let client = create_connected_client().await?;
 
             // Step 1: Get our KeyPackage event IDs that we have private keys for
             log("Finding our KeyPackage events...");
@@ -683,14 +689,7 @@ pub fn create_keypackage_and_wait_for_invite() -> js_sys::Promise {
             log(&format!("KeyPackage event ID: {}", kp_event_id.to_hex()));
 
             // Step 3: Connect to relays and start listening for Welcomes BEFORE publishing
-            let client = Client::default();
-            let relays = get_relays_internal()?;
-            for relay in &relays {
-                if let Ok(url) = RelayUrl::parse(relay) {
-                    let _ = client.add_relay(url).await;
-                }
-            }
-            client.connect().await;
+            let client = create_connected_client().await?;
 
             // Subscribe to Welcomes that reference our KeyPackage
             log("Starting Welcome subscription...");
@@ -804,14 +803,7 @@ pub fn create_group_with_members(name: String, description: String, member_npubs
             // Fetch KeyPackages for each member
             log(&format!("Fetching KeyPackages for {} member(s)...", member_npubs.len()));
 
-            let client = Client::default();
-            let relays = get_relays_internal()?;
-            for relay in &relays {
-                if let Ok(url) = RelayUrl::parse(relay) {
-                    let _ = client.add_relay(url).await;
-                }
-            }
-            client.connect().await;
+            let client = create_connected_client().await?;
 
             let mut key_package_events = Vec::new();
             let mut admin_pubkeys = vec![our_pubkey]; // Creator is always admin
@@ -928,14 +920,7 @@ pub fn invite_member_to_group(group_id_hex: String, member_npub: String) -> js_s
             // Fetch member's KeyPackage
             log(&format!("Fetching KeyPackage for {}...", &member_npub[..16]));
 
-            let client = Client::default();
-            let relays = get_relays_internal()?;
-            for relay in &relays {
-                if let Ok(url) = RelayUrl::parse(relay) {
-                    let _ = client.add_relay(url).await;
-                }
-            }
-            client.connect().await;
+            let client = create_connected_client().await?;
 
             let filter = nostr::Filter::new()
                 .kind(Kind::Custom(443))
@@ -1188,15 +1173,7 @@ pub fn send_message_to_group(group_id_hex: String, message_content: String) -> j
 
             // Publish to relays
             log("  Connecting to relays...");
-            let client = Client::default();
-            let relays = get_relays_internal()?;
-            for relay in &relays {
-                if let Ok(url) = RelayUrl::parse(relay) {
-                    log(&format!("    Adding relay: {}", relay));
-                    let _ = client.add_relay(url).await;
-                }
-            }
-            client.connect().await;
+            let client = create_connected_client().await?;
             log("  ✓ Connected to relays");
 
             // Merge pending commit to finalize our state BEFORE publishing
@@ -1305,15 +1282,7 @@ pub fn subscribe_to_group_messages(group_id_hex: String, callback: js_sys::Funct
             log(&format!("  Filtering by nostr_group_id: {}", &nostr_group_id_hex[..16]));
 
             // Create client and connect to relays
-            let client = Client::default();
-            let relays = get_relays_internal()?;
-            for relay in &relays {
-                if let Ok(url) = RelayUrl::parse(relay) {
-                    log(&format!("  Adding relay: {}", relay));
-                    let _ = client.add_relay(url).await;
-                }
-            }
-            client.connect().await;
+            let client = create_connected_client().await?;
             log("  ✓ Connected to relays");
 
             // Subscribe to MLS group messages (kind 445) filtered by this specific group

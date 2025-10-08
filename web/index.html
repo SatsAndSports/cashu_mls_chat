@@ -575,7 +575,8 @@
                         }
 
                         // Refresh groups list to update "Last activity" timestamp
-                        await refreshGroups();
+                        // Pass false to skip re-subscribing (we're already subscribed)
+                        await refreshGroups(false);
                     });
 
                     subscribedGroups.add(group.id);
@@ -587,11 +588,10 @@
         }
 
         async function initializeGroups() {
-            await refreshGroups();
-            await subscribeToAllGroups();
+            await refreshGroups(); // Now auto-subscribes
         }
 
-        window.refreshGroups = async function() {
+        window.refreshGroups = async function(autoSubscribe = true) {
             try {
                 console.log('🔄 Refreshing groups list...');
                 document.getElementById('groups-status').textContent = 'Loading groups...';
@@ -637,6 +637,11 @@
 
                 console.log(`✅ Groups list refreshed (${groups.length} group(s))`);
                 log(`Loaded ${groups.length} group(s)`);
+
+                // Auto-subscribe to any new groups
+                if (autoSubscribe) {
+                    await subscribeToAllGroups();
+                }
             } catch (err) {
                 console.error('❌ Failed to fetch groups:', err);
                 document.getElementById('groups-status').innerHTML =
@@ -660,10 +665,8 @@
 
                 if (count > 0) {
                     statusDiv.innerHTML = `<div class="success">✅ Joined ${count} new group(s)!</div>`;
-                    // Refresh groups list
+                    // Refresh groups list and auto-subscribe to new groups
                     await refreshGroups();
-                    // Subscribe to new groups
-                    await subscribeToAllGroups();
                 } else {
                     statusDiv.innerHTML = '<div class="success">No new invites found</div>';
                 }
@@ -1058,8 +1061,7 @@
                 // Wait 2 seconds then close modal and refresh groups
                 setTimeout(async () => {
                     document.getElementById('wait-invite-modal').style.display = 'none';
-                    await refreshGroups();
-                    await subscribeToAllGroups();
+                    await refreshGroups(); // Auto-subscribes
                     // Switch to groups tab
                     showSection('groups');
                 }, 2000);
@@ -1120,8 +1122,7 @@
                 // Wait a moment then close and refresh
                 setTimeout(async () => {
                     closeCreateGroupModal();
-                    await refreshGroups();
-                    await subscribeToAllGroups();
+                    await refreshGroups(); // Auto-subscribes
                     showSection('groups');
                 }, 2000);
             } catch (err) {
