@@ -862,6 +862,30 @@ pub fn invite_member_to_group(group_id_hex: String, member_npub: String) -> js_s
                 log(&format!("✅ Member added to group (no Welcome needed)"));
             }
 
+            // Step 3a: Send "joined" notification message
+            log("Sending 'joined' notification to group...");
+            let joined_message = format!("{} joined the group", &member_npub);
+
+            let rumor = nostr::UnsignedEvent {
+                id: None,
+                pubkey: keys.public_key(),
+                created_at: nostr::Timestamp::now(),
+                kind: Kind::GiftWrap,
+                tags: nostr::Tags::new(),
+                content: joined_message,
+            };
+
+            let message_event = mdk.create_message(&group_id, rumor)
+                .map_err(|e| JsValue::from_str(&format!("Failed to create 'joined' message: {}", e)))?;
+
+            mdk.merge_pending_commit(&group_id)
+                .map_err(|e| JsValue::from_str(&format!("Failed to merge 'joined' message commit: {}", e)))?;
+
+            client.send_event(&message_event).await
+                .map_err(|e| JsValue::from_str(&format!("Failed to send 'joined' message: {}", e)))?;
+
+            log("✅ 'Joined' notification sent!");
+
             // Step 4: Add the new member to the admin list
             log("Adding new member as admin...");
 
@@ -894,9 +918,33 @@ pub fn invite_member_to_group(group_id_hex: String, member_npub: String) -> js_s
 
             log("✅ Member added as admin!");
 
-            // Step 5: Send notification message to the group
-            log("Sending invitation notification to group...");
-            let invite_message = format!("Invited {} to the group (KeyPackage: {})", &member_npub[..16], &newest.id.to_hex()[..16]);
+            // Step 4a: Send "promoted to admin" notification message
+            log("Sending 'promoted to admin' notification to group...");
+            let promoted_message = format!("{} promoted to admin", &member_npub);
+
+            let rumor_promoted = nostr::UnsignedEvent {
+                id: None,
+                pubkey: keys.public_key(),
+                created_at: nostr::Timestamp::now(),
+                kind: Kind::GiftWrap,
+                tags: nostr::Tags::new(),
+                content: promoted_message,
+            };
+
+            let message_event_promoted = mdk.create_message(&group_id, rumor_promoted)
+                .map_err(|e| JsValue::from_str(&format!("Failed to create 'promoted' message: {}", e)))?;
+
+            mdk.merge_pending_commit(&group_id)
+                .map_err(|e| JsValue::from_str(&format!("Failed to merge 'promoted' message commit: {}", e)))?;
+
+            client.send_event(&message_event_promoted).await
+                .map_err(|e| JsValue::from_str(&format!("Failed to send 'promoted' message: {}", e)))?;
+
+            log("✅ 'Promoted to admin' notification sent!");
+
+            // Step 5: Send detailed invitation record (for debugging)
+            log("Sending detailed invitation record to group...");
+            let invite_message = format!("Invited {} to the group (KeyPackage: {})", &member_npub, &newest.id.to_hex()[..16]);
 
             // Create message rumor
             let rumor = nostr::UnsignedEvent {
@@ -916,11 +964,11 @@ pub fn invite_member_to_group(group_id_hex: String, member_npub: String) -> js_s
             mdk.merge_pending_commit(&group_id)
                 .map_err(|e| JsValue::from_str(&format!("Failed to merge message commit: {}", e)))?;
 
-            // Publish notification message
+            // Publish detailed invitation record
             client.send_event(&message_event).await
-                .map_err(|e| JsValue::from_str(&format!("Failed to send notification message: {}", e)))?;
+                .map_err(|e| JsValue::from_str(&format!("Failed to send invitation record: {}", e)))?;
 
-            log("✅ Notification message sent!");
+            log("✅ Detailed invitation record sent!");
 
             // Disconnect
             let _ = client.disconnect().await;
@@ -1137,6 +1185,15 @@ pub fn subscribe_to_group_messages(group_id_hex: String, callback: js_sys::Funct
                 .map_err(|e| JsValue::from_str(&format!("Invalid group ID hex: {}", e)))?;
             let group_id = GroupId::from_slice(&group_id_bytes);
 
+            // Get the group to find its nostr_group_id (used in event tags)
+            let mdk = create_mdk().await?;
+            let group = mdk.get_group(&group_id)
+                .map_err(|e| JsValue::from_str(&format!("Failed to get group: {}", e)))?
+                .ok_or_else(|| JsValue::from_str("Group not found"))?;
+
+            let nostr_group_id_hex = hex::encode(group.nostr_group_id);
+            log(&format!("  Filtering by nostr_group_id: {}", &nostr_group_id_hex[..16]));
+
             // Create client and connect to relays
             let client = Client::default();
             for relay in RELAYS {
@@ -1148,11 +1205,12 @@ pub fn subscribe_to_group_messages(group_id_hex: String, callback: js_sys::Funct
             client.connect().await;
             log("  ✓ Connected to relays");
 
-            // Subscribe to MLS group messages (kind 445) from recent history
+            // Subscribe to MLS group messages (kind 445) filtered by this specific group
             let now = nostr::Timestamp::now();
             let recent = nostr::Timestamp::from(now.as_u64().saturating_sub(10));
             let filter = nostr::Filter::new()
                 .kind(Kind::MlsGroupMessage)
+                .custom_tag(nostr::SingleLetterTag::lowercase(nostr::Alphabet::H), nostr_group_id_hex)
                 .since(recent);
 
             log("  Subscribing to MLS group messages (kind 445)...");

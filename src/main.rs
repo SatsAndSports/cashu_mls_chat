@@ -963,6 +963,13 @@ impl ChatApp {
                                         }
                                     }
 
+                                    // Send "joined" notification message
+                                    tracing::info!("{} sending 'joined' notification", user_name_clone);
+                                    let joined_message = format!("{} joined the group", npub_str);
+                                    if let Err(e) = state.send_message(user_idx, joined_message).await {
+                                        tracing::error!("{} failed to send 'joined' notification: {}", user_name_clone, e);
+                                    }
+
                                     // Add new member to admin list
                                     tracing::info!("{} adding new member as admin", user_name_clone);
                                     let admin_update_result = {
@@ -1032,12 +1039,20 @@ impl ChatApp {
                                         }
                                     }
 
+                                    // Send "promoted to admin" notification message
+                                    tracing::info!("{} sending 'promoted to admin' notification", user_name_clone);
+                                    let promoted_message = format!("{} promoted to admin", npub_str);
+                                    if let Err(e) = state.send_message(user_idx, promoted_message).await {
+                                        tracing::error!("{} failed to send 'promoted' notification: {}", user_name_clone, e);
+                                    }
+
                                     add_system_message(&messages, format!("{}: ✅ Invited {} to the group! (KeyPackage: {})", user_name_clone, npub_str, &event_id[..16]));
 
-                                    // Send persistent message to group
+                                    // Send detailed invitation record (for debugging)
+                                    tracing::info!("{} sending detailed invitation record", user_name_clone);
                                     let invite_message = format!("Invited {} to the group (KeyPackage: {})", npub_str, &event_id[..16]);
                                     if let Err(e) = state.send_message(user_idx, invite_message).await {
-                                        tracing::error!("{} failed to send invite notification message: {}", user_name_clone, e);
+                                        tracing::error!("{} failed to send detailed invitation record: {}", user_name_clone, e);
                                     }
                                 }
                                 Err(e) => {
