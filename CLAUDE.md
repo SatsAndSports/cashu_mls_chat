@@ -1,0 +1,2 @@
+- when rebuilding wasm via wasm-pack, always use --dev
+- every time the wasm-pack needs to be rebuilt, rebuild with --dev and print a message at the end about how long it took

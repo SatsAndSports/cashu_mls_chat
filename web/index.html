@@ -21,6 +21,19 @@
             color: white;
             padding: 15px 20px;
             font-size: 1.2em;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        #menu-toggle {
+            display: none;
+            background: none;
+            border: none;
+            color: white;
+            font-size: 1.5em;
+            cursor: pointer;
+            padding: 5px 10px;
+            margin: 0;
         }
         #main {
             display: flex;
@@ -107,10 +120,126 @@
             background: #0066cc;
             color: white;
         }
+
+        /* Mobile Responsive Styles */
+        @media (max-width: 768px) {
+            #menu-toggle {
+                display: block;
+            }
+
+            #sidebar {
+                position: fixed;
+                left: -250px;
+                top: 0;
+                bottom: 0;
+                width: 250px;
+                z-index: 1000;
+                transition: left 0.3s ease;
+                box-shadow: 2px 0 5px rgba(0,0,0,0.3);
+            }
+
+            #sidebar.open {
+                left: 0;
+            }
+
+            #content {
+                padding: 10px;
+            }
+
+            /* Larger touch targets */
+            button {
+                min-height: 44px;
+                font-size: 1em;
+            }
+
+            .nav-item {
+                padding: 18px 20px;
+                font-size: 1.1em;
+            }
+
+            .group-item {
+                padding: 15px;
+                font-size: 1em;
+            }
+
+            /* Chat area */
+            #chat-messages {
+                height: 50vh !important;
+            }
+
+            #chat-input {
+                font-size: 16px !important; /* Prevents zoom on iOS */
+            }
+
+            /* Header adjustments */
+            #header {
+                padding: 12px 15px;
+                font-size: 1.1em;
+            }
+
+            /* Modal adjustments */
+            #create-group-modal > div,
+            #invite-member-modal > div,
+            #receive-modal > div,
+            #qr-modal > div {
+                margin: 20px;
+                max-width: none !important;
+                border-radius: 8px;
+            }
+
+            /* Reduce font sizes slightly */
+            h2 {
+                font-size: 1.3em;
+            }
+
+            /* Chat header buttons */
+            #chat-section > div:first-child {
+                flex-direction: column;
+                align-items: stretch !important;
+                gap: 10px;
+            }
+
+            #chat-section > div:first-child > div {
+                flex-direction: column;
+                width: 100%;
+            }
+
+            #chat-section > div:first-child button {
+                width: 100%;
+            }
+
+            /* Input fields larger for touch */
+            input[type="text"],
+            textarea {
+                font-size: 16px !important;
+                padding: 12px !important;
+            }
+        }
+
+        /* Overlay for sidebar on mobile */
+        #sidebar-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.5);
+            z-index: 999;
+        }
+
+        #sidebar-overlay.active {
+            display: block;
+        }
     </style>
 </head>
 <body>
-    <div id="header">🔐 MDK Ecash Web Client</div>
+    <div id="header">
+        <button id="menu-toggle" onclick="toggleSidebar()">☰</button>
+        <span>🔐 MDK Ecash Web Client</span>
+        <span></span> <!-- Spacer for flex layout -->
+    </div>
+    <div id="sidebar-overlay" onclick="closeSidebar()"></div>
 
     <div id="main">
         <!-- Sidebar -->
@@ -440,8 +569,25 @@
 
         let wasm;
 
+        // Mobile sidebar toggle
+        window.toggleSidebar = function() {
+            const sidebar = document.getElementById('sidebar');
+            const overlay = document.getElementById('sidebar-overlay');
+            sidebar.classList.toggle('open');
+            overlay.classList.toggle('active');
+        };
+
+        window.closeSidebar = function() {
+            const sidebar = document.getElementById('sidebar');
+            const overlay = document.getElementById('sidebar-overlay');
+            sidebar.classList.remove('open');
+            overlay.classList.remove('active');
+        };
+
         // Navigation
         window.showSection = function(sectionName, event, skipHashUpdate = false) {
+            // Close sidebar on mobile when navigating
+            closeSidebar();
             // Hide all sections
             document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
             document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
@@ -683,6 +829,9 @@
 
         window.openChat = async function(groupId, groupName, isAdmin = false, skipHashUpdate = false) {
             console.log(`💬 Opening chat for group: ${groupName} (${groupId}), isAdmin: ${isAdmin}`);
+
+            // Close sidebar on mobile
+            closeSidebar();
 
             // Store current group info
             currentChatGroupId = groupId;
