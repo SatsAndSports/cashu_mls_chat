@@ -272,6 +272,18 @@
             <div id="wallet-section" class="section">
                 <h2>💰 Wallet</h2>
 
+                <!-- Main action buttons -->
+                <div style="display: flex; gap: 15px; margin: 20px 0;">
+                    <button onclick="showReceiveModal()" style="flex: 1; padding: 15px 30px; font-size: 1.1em; background: #28a745; border-radius: 8px;">
+                        📥 Receive e-cash
+                    </button>
+                    <button onclick="showSendModal()" style="flex: 1; padding: 15px 30px; font-size: 1.1em; background: #0066cc; border-radius: 8px;">
+                        📤 Send e-cash
+                    </button>
+                </div>
+
+                <div id="wallet-status" style="margin-bottom: 20px;">Initializing wallet...</div>
+
                 <!-- Per-mint balances -->
                 <div id="mint-balances" style="margin: 20px 0;">
                     <h3 style="margin-bottom: 10px;">Balances by Mint</h3>
@@ -284,9 +296,6 @@
                     <div id="trusted-mints-list" style="margin: 15px 0;"></div>
                     <button onclick="showAddMintModal()">➕ Add Trusted Mint</button>
                 </div>
-
-                <div id="wallet-status" style="margin-top: 20px;">Initializing wallet...</div>
-                <button onclick="showReceiveModal()">Receive e-cash</button>
             </div>
 
             <!-- Key Packages Section -->
@@ -354,6 +363,28 @@
                 <button onclick="hideReceiveModal()">Cancel</button>
             </div>
             <div id="receive-status" style="margin-top: 10px;"></div>
+        </div>
+    </div>
+
+    <!-- Send Modal -->
+    <div id="send-modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000;">
+        <div style="background: white; max-width: 600px; margin: 50px auto; padding: 20px; border-radius: 8px;">
+            <h2>📤 Send e-cash</h2>
+            <div style="margin: 20px 0;">
+                <label style="display: block; margin-bottom: 5px; font-weight: bold;">Mint:</label>
+                <select id="send-mint-select" style="width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 1em; font-family: monospace;">
+                    <option value="">Loading mints...</option>
+                </select>
+            </div>
+            <div style="margin: 20px 0;">
+                <label style="display: block; margin-bottom: 5px; font-weight: bold;">Amount (sats):</label>
+                <input type="number" id="send-amount-input" placeholder="10" min="1" style="width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 1.1em;">
+            </div>
+            <div id="send-status" style="margin-top: 10px;"></div>
+            <div style="margin-top: 20px; display: flex; gap: 10px;">
+                <button onclick="createSendToken()" style="flex: 1; padding: 12px; background: #0066cc; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 1em;">Create Token</button>
+                <button onclick="hideSendModal()" style="padding: 12px 30px; background: #ccc; border: none; border-radius: 4px; cursor: pointer;">Cancel</button>
+            </div>
         </div>
     </div>
 
@@ -600,6 +631,7 @@
             init_wallet,
             get_balance,
             receive_token,
+            send_ecash,
             parse_token_info,
             get_groups,
             fetch_welcome_events,
@@ -1614,6 +1646,91 @@
                 } else {
                     statusDiv.innerHTML = `<div class="error">Failed to receive: ${err}</div>`;
                 }
+            }
+        };
+
+        // Send modal functions
+        window.showSendModal = async function() {
+            document.getElementById('send-modal').style.display = 'block';
+            document.getElementById('send-amount-input').value = '';
+            document.getElementById('send-status').innerHTML = '';
+
+            // Load mints with balances
+            await loadSendMintOptions();
+        };
+
+        window.hideSendModal = function() {
+            document.getElementById('send-modal').style.display = 'none';
+        };
+
+        async function loadSendMintOptions() {
+            const selectEl = document.getElementById('send-mint-select');
+
+            try {
+                const balancesJson = await get_all_mint_balances();
+                const balances = JSON.parse(balancesJson);
+                const currentMint = await get_current_mint();
+
+                if (balances.length === 0) {
+                    selectEl.innerHTML = '<option value="">No mints with balance</option>';
+                    return;
+                }
+
+                // Build options
+                selectEl.innerHTML = balances.map(b => {
+                    const selected = b.mint === currentMint ? 'selected' : '';
+                    const trustBadge = b.is_trusted ? '' : ' [UNTRUSTED]';
+                    return `<option value="${b.mint}" ${selected}>${b.mint}${trustBadge} (${b.balance} sats)</option>`;
+                }).join('');
+            } catch (err) {
+                console.error('Failed to load mints:', err);
+                selectEl.innerHTML = '<option value="">Error loading mints</option>';
+            }
+        }
+
+        window.createSendToken = async function() {
+            const amount = parseInt(document.getElementById('send-amount-input').value);
+            const selectedMint = document.getElementById('send-mint-select').value;
+            const statusDiv = document.getElementById('send-status');
+
+            if (!amount || amount <= 0) {
+                statusDiv.innerHTML = '<div class="error">Please enter a valid amount</div>';
+                return;
+            }
+
+            if (!selectedMint) {
+                statusDiv.innerHTML = '<div class="error">Please select a mint</div>';
+                return;
+            }
+
+            statusDiv.innerHTML = 'Creating token...';
+
+            try {
+                // Set selected mint as current
+                const originalMint = await get_current_mint();
+                await set_current_mint(selectedMint);
+
+                // Create token
+                const token = await send_ecash(BigInt(amount));
+
+                // Restore original mint
+                await set_current_mint(originalMint);
+
+                // Display token for copying
+                statusDiv.innerHTML = `
+                    <div class="success">✅ Token created for ${amount} sats!</div>
+                    <div style="margin-top: 15px;">
+                        <label style="display: block; margin-bottom: 5px; font-weight: bold;">Token (copy this):</label>
+                        <textarea readonly rows="6" style="width: 100%; font-family: monospace; padding: 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 0.85em;">${token}</textarea>
+                        <button onclick="navigator.clipboard.writeText('${token.replace(/'/g, "\\'")}'); alert('Token copied to clipboard!')" style="margin-top: 10px;">📋 Copy to Clipboard</button>
+                    </div>
+                `;
+
+                // Update balance display
+                await refreshMintBalances();
+            } catch (err) {
+                console.error('Failed to create token:', err);
+                statusDiv.innerHTML = `<div class="error">Failed to create token: ${err}</div>`;
             }
         };
 

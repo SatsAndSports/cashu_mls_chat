@@ -704,6 +704,43 @@ pub fn parse_token_info(token_str: String) -> js_sys::Promise {
     })
 }
 
+/// Send ecash tokens
+/// Returns a Promise that resolves to the token string
+#[wasm_bindgen]
+pub fn send_ecash(amount: u64) -> js_sys::Promise {
+    future_to_promise(async move {
+        let result = async {
+            use cdk::wallet::SendOptions;
+
+            log(&format!("Creating token for {} sats", amount));
+
+            // Create wallet (uses current mint)
+            let wallet = create_wallet().await?;
+
+            // Prepare send
+            let prepared = wallet
+                .prepare_send(cdk::Amount::from(amount), SendOptions::default())
+                .await
+                .map_err(|e| JsValue::from_str(&format!("Failed to prepare send: {}", e)))?;
+
+            // Confirm and create token
+            let token = prepared
+                .confirm(None)
+                .await
+                .map_err(|e| JsValue::from_str(&format!("Failed to create token: {}", e)))?;
+
+            let token_str = token.to_string();
+
+            log(&format!("✅ Created token: {} sats", amount));
+
+            Ok::<String, JsValue>(token_str)
+        }
+        .await;
+
+        result.map(|token| JsValue::from_str(&token))
+    })
+}
+
 /// Receive ecash token
 /// Returns a Promise that resolves to the amount received
 /// Creates a wallet for the token's mint (not the current mint)
