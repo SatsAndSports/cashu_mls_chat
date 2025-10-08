@@ -1206,12 +1206,10 @@ pub fn subscribe_to_group_messages(group_id_hex: String, callback: js_sys::Funct
             log("  ✓ Connected to relays");
 
             // Subscribe to MLS group messages (kind 445) filtered by this specific group
-            let now = nostr::Timestamp::now();
-            let recent = nostr::Timestamp::from(now.as_u64().saturating_sub(10));
+            // No time filter - get all historical messages for this group
             let filter = nostr::Filter::new()
                 .kind(Kind::MlsGroupMessage)
-                .custom_tag(nostr::SingleLetterTag::lowercase(nostr::Alphabet::H), nostr_group_id_hex)
-                .since(recent);
+                .custom_tag(nostr::SingleLetterTag::lowercase(nostr::Alphabet::H), nostr_group_id_hex);
 
             log("  Subscribing to MLS group messages (kind 445)...");
             client.subscribe(filter, None).await
