@@ -411,11 +411,20 @@ impl MessageStorage for MdkHybridStorage {
         // Add to messages by event ID
         state.messages.insert(message.id, message.clone());
 
-        // Add to messages by group
-        state.messages_by_group
+        // Add to messages by group (with deduplication)
+        let group_messages = state.messages_by_group
             .entry(message.mls_group_id.clone())
-            .or_insert_with(Vec::new)
-            .push(message);
+            .or_insert_with(Vec::new);
+
+        // Find and update existing message or add new one
+        match group_messages.iter().position(|m| m.id == message.id) {
+            Some(idx) => {
+                group_messages[idx] = message;
+            }
+            None => {
+                group_messages.push(message);
+            }
+        }
 
         drop(state);
 
