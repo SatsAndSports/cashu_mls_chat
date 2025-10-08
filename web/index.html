@@ -894,11 +894,18 @@
                 return;
             }
 
+            // Show validating status
+            document.getElementById('add-mint-status').innerHTML = '<div style="color: #0066cc;">⏳ Validating mint...</div>';
+
             try {
+                console.log('Calling add_trusted_mint for:', url);
                 const added = await add_trusted_mint(url);
+                console.log('add_trusted_mint returned:', added);
+
                 if (added) {
                     document.getElementById('add-mint-status').innerHTML = '<div class="success">✓ Mint added successfully!</div>';
                     await refreshTrustedMints();
+                    await refreshMintBalances();
                     setTimeout(closeAddMintModal, 1500);
                 } else {
                     document.getElementById('add-mint-status').innerHTML = '<div class="error">Mint already in trusted list</div>';
@@ -917,6 +924,7 @@
             try {
                 await remove_trusted_mint(mintUrl);
                 await refreshTrustedMints();
+                await refreshMintBalances();
             } catch (err) {
                 console.error('Failed to remove mint:', err);
                 alert(`Failed to remove mint: ${err}`);

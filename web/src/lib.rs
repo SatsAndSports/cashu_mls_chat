@@ -255,38 +255,85 @@ pub fn get_trusted_mints() -> Result<String, JsValue> {
 }
 
 /// Add a mint to the trusted list
-/// Returns true if added, false if already in list
+/// Validates the mint by connecting and fetching keysets
+/// Returns a Promise that resolves to true if added, false if already in list
 #[wasm_bindgen]
-pub fn add_trusted_mint(mint_url: String) -> Result<bool, JsValue> {
-    let storage = get_local_storage()?;
+pub fn add_trusted_mint(mint_url: String) -> js_sys::Promise {
+    future_to_promise(async move {
+        let result = async {
+            log(&format!("🔍 Validating mint: {}", mint_url));
 
-    // Validate mint URL
-    MintUrl::from_str(&mint_url)
-        .map_err(|e| JsValue::from_str(&format!("Invalid mint URL: {}", e)))?;
+            // Validate mint URL format
+            let _mint_url_parsed = MintUrl::from_str(&mint_url)
+                .map_err(|e| {
+                    log(&format!("❌ Invalid URL format: {}", e));
+                    JsValue::from_str(&format!("Invalid mint URL: {}", e))
+                })?;
 
-    // Load current list
-    let mints_json = storage
-        .get_item("trusted_mints")?
-        .unwrap_or_else(|| "[]".to_string());
+            log("📡 Creating wallet and connecting to mint...");
 
-    let mut mints: Vec<String> = serde_json::from_str(&mints_json)
-        .map_err(|e| JsValue::from_str(&format!("Failed to parse trusted mints: {}", e)))?;
+            // Try to connect to the mint and fetch its info
+            // This requires actual network communication with the mint
+            let wallet = create_wallet_for_mint(mint_url.clone()).await
+                .map_err(|e| {
+                    log(&format!("❌ Failed to create wallet: {:?}", e));
+                    e
+                })?;
 
-    // Check if already in list
-    if mints.contains(&mint_url) {
-        return Ok(false);
-    }
+            log("🔎 Fetching mint info from network...");
 
-    // Add to list
-    mints.push(mint_url);
+            // Fetch mint info - this makes an actual HTTP request to the mint
+            // Will fail if mint is unreachable or not a valid Cashu mint
+            let mint_info_option = wallet.fetch_mint_info()
+                .await
+                .map_err(|e| {
+                    log(&format!("❌ fetch_mint_info failed: {:?}", e));
+                    JsValue::from_str(&format!("Failed to connect to mint (not a valid Cashu mint): {}", e))
+                })?;
 
-    // Save back to localStorage
-    let updated_json = serde_json::to_string(&mints)
-        .map_err(|e| JsValue::from_str(&format!("Failed to serialize mints: {}", e)))?;
+            // Check if we actually got mint info
+            let mint_info = mint_info_option
+                .ok_or_else(|| {
+                    log("❌ Mint returned no info (unreachable or not a valid Cashu mint)");
+                    JsValue::from_str("Failed to connect to mint: No mint info returned. This is not a valid Cashu mint or is unreachable.")
+                })?;
 
-    storage.set_item("trusted_mints", &updated_json)?;
+            log(&format!("✅ Mint info received: {:?}", mint_info));
 
-    Ok(true)
+            // Now add to trusted list
+            let storage = get_local_storage()?;
+
+            // Load current list
+            let mints_json = storage
+                .get_item("trusted_mints")?
+                .unwrap_or_else(|| "[]".to_string());
+
+            let mut mints: Vec<String> = serde_json::from_str(&mints_json)
+                .map_err(|e| JsValue::from_str(&format!("Failed to parse trusted mints: {}", e)))?;
+
+            // Check if already in list
+            if mints.contains(&mint_url) {
+                log("ℹ️ Mint already in trusted list");
+                return Ok::<bool, JsValue>(false);
+            }
+
+            // Add to list
+            mints.push(mint_url.clone());
+
+            // Save back to localStorage
+            let updated_json = serde_json::to_string(&mints)
+                .map_err(|e| JsValue::from_str(&format!("Failed to serialize mints: {}", e)))?;
+
+            storage.set_item("trusted_mints", &updated_json)?;
+
+            log(&format!("✅ Mint added to trusted list: {}", mint_url));
+
+            Ok(true)
+        }
+        .await;
+
+        result.map(|added| JsValue::from_bool(added))
+    })
 }
 
 /// Remove a mint from the trusted list
