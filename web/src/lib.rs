@@ -1206,10 +1206,24 @@ pub fn subscribe_to_group_messages(group_id_hex: String, callback: js_sys::Funct
             log("  ✓ Connected to relays");
 
             // Subscribe to MLS group messages (kind 445) filtered by this specific group
-            // No time filter - get all historical messages for this group
-            let filter = nostr::Filter::new()
-                .kind(Kind::MlsGroupMessage)
-                .custom_tag(nostr::SingleLetterTag::lowercase(nostr::Alphabet::H), nostr_group_id_hex);
+            // Optimization: If we have message history, only fetch recent messages (last 10 min + buffer)
+            let filter = if let Some(last_msg_time) = group.last_message_at {
+                let ten_minutes = 600; // 10 minutes in seconds
+                let since = nostr::Timestamp::from(last_msg_time.as_u64().saturating_sub(ten_minutes));
+
+                log(&format!("  Subscribing since {} (last_message_at - 10 min)", since.as_u64()));
+
+                nostr::Filter::new()
+                    .kind(Kind::MlsGroupMessage)
+                    .custom_tag(nostr::SingleLetterTag::lowercase(nostr::Alphabet::H), nostr_group_id_hex)
+                    .since(since)
+            } else {
+                log("  First join - fetching all history");
+
+                nostr::Filter::new()
+                    .kind(Kind::MlsGroupMessage)
+                    .custom_tag(nostr::SingleLetterTag::lowercase(nostr::Alphabet::H), nostr_group_id_hex)
+            };
 
             log("  Subscribing to MLS group messages (kind 445)...");
             client.subscribe(filter, None).await
