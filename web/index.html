@@ -570,6 +570,22 @@
 
         let wasm;
 
+        // Unread message tracking
+        function getLastReadAt(groupId) {
+            const key = `last_read_at_${groupId}`;
+            const value = localStorage.getItem(key);
+            return value ? parseInt(value) : 0;
+        }
+
+        function setLastReadAt(groupId, timestamp) {
+            const key = `last_read_at_${groupId}`;
+            localStorage.setItem(key, timestamp.toString());
+        }
+
+        function countUnreadMessages(groupId, messages, lastReadAt) {
+            return messages.filter(msg => msg.created_at > lastReadAt).length;
+        }
+
         // Mobile sidebar toggle
         window.toggleSidebar = function() {
             const sidebar = document.getElementById('sidebar');
@@ -798,9 +814,11 @@
                         return bTime - aTime; // Descending order (newest first)
                     });
 
-                    // Fetch last message for each group to show preview
+                    // Fetch last message for each group to show preview and count unread
                     const groupsWithPreviews = await Promise.all(groups.map(async (group) => {
                         let messagePreview = '';
+                        let unreadCount = 0;
+
                         // Check if group has any messages (using last_message_at instead of last_message_id)
                         console.log(`Fetching preview for group ${group.name}, has last_message_at: ${!!group.last_message_at}`);
                         if (group.last_message_at) {
@@ -808,6 +826,12 @@
                                 const messagesJson = await get_messages_for_group(group.id);
                                 const messages = JSON.parse(messagesJson);
                                 console.log(`  Group ${group.name} has ${messages.length} messages`);
+
+                                // Count unread messages
+                                const lastReadAt = getLastReadAt(group.id);
+                                unreadCount = countUnreadMessages(group.id, messages, lastReadAt);
+                                console.log(`  Group ${group.name} has ${unreadCount} unread messages (last read: ${lastReadAt})`);
+
                                 if (messages.length > 0) {
                                     // Get the last message (most recent)
                                     const lastMsg = messages[messages.length - 1];
@@ -822,7 +846,7 @@
                                 console.error('Failed to fetch message preview:', err);
                             }
                         }
-                        return { ...group, messagePreview };
+                        return { ...group, messagePreview, unreadCount };
                     }));
 
                     listDiv.innerHTML = groupsWithPreviews.map(group => {
@@ -833,24 +857,39 @@
                             ? `<div style="color: #888; font-size: 0.9em; margin-top: 4px; font-style: italic;">${group.messagePreview}</div>`
                             : '';
 
-                        // Format timestamp as date/time on separate lines
+                        // Unread badge and timestamp
+                        const hasUnread = group.unreadCount > 0;
+                        const unreadBadge = hasUnread
+                            ? `<span style="background: #0066cc; color: white; border-radius: 12px; padding: 3px 10px; font-size: 0.85em; font-weight: bold; margin-right: 8px; display: inline-block;">${group.unreadCount}</span>`
+                            : '';
+
+                        // Extra bold group name if unread (900 weight)
+                        const groupNameStyle = hasUnread ? 'font-weight: 900;' : '';
+
+                        // Format timestamp with badge to the left of date/time
                         let timestampHtml = '';
                         if (group.last_message_at) {
                             const date = new Date(group.last_message_at * 1000);
                             const dateStr = date.toLocaleDateString('en-CA'); // YYYY-MM-DD format
                             const timeStr = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
                             timestampHtml = `
-                                <div style="text-align: right; color: #999; font-size: 0.85em; line-height: 1.3;">
-                                    <div>${dateStr}</div>
-                                    <div>${timeStr}</div>
+                                <div style="display: flex; align-items: center; gap: 8px;">
+                                    ${unreadBadge}
+                                    <div style="text-align: right; color: #999; font-size: 0.85em; line-height: 1.3;">
+                                        <div>${dateStr}</div>
+                                        <div>${timeStr}</div>
+                                    </div>
                                 </div>`;
+                        } else if (hasUnread) {
+                            // If no timestamp but has unread, just show badge
+                            timestampHtml = `<div>${unreadBadge}</div>`;
                         }
 
-                        console.log(`  Rendering group ${group.name}: messagePreview="${group.messagePreview}", preview HTML length=${preview.length}`);
+                        console.log(`  Rendering group ${group.name}: messagePreview="${group.messagePreview}", unreadCount=${group.unreadCount}`);
                         return `
                         <div class="group-item" onclick="openChat('${group.id}', '${(group.name || 'Unnamed Group').replace(/'/g, "\\'")}', ${group.is_admin})" style="cursor: pointer; padding: 15px; border-bottom: 1px solid #eee; transition: background 0.2s; display: flex; justify-content: space-between; align-items: flex-start;" onmouseover="this.style.background='#f5f5f5'" onmouseout="this.style.background='white'">
                             <div style="flex: 1; min-width: 0;">
-                                <strong style="font-size: 1.1em;">${group.name || 'Unnamed Group'}</strong>${adminBadge}
+                                <strong style="font-size: 1.1em; ${groupNameStyle}">${group.name || 'Unnamed Group'}</strong>${adminBadge}
                                 <span style="color: #666; font-size: 0.9em; margin-left: 10px;">👥 ${memberCount} member${memberCount !== 1 ? 's' : ''}</span>
                                 <br>
                                 <small style="color: #666;">${group.description || 'No description'}</small>${preview}
@@ -913,6 +952,9 @@
 
             // Close sidebar on mobile
             closeSidebar();
+
+            // Mark as read (current timestamp)
+            setLastReadAt(groupId, Math.floor(Date.now() / 1000));
 
             // Store current group info
             currentChatGroupId = groupId;
