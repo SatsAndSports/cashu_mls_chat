@@ -841,44 +841,12 @@ pub fn invite_member_to_group(group_id_hex: String, member_npub: String) -> js_s
             // Get our keys
             let keys = get_keys()?;
 
-            // Create MDK and add member to group
-            log("Adding member to group...");
+            // Create MDK
             let mdk = create_mdk().await?;
 
-            let invite_result = mdk.add_members(&group_id, &[newest.clone()])
-                .map_err(|e| JsValue::from_str(&format!("Failed to add member: {}", e)))?;
-
-            // Step 1: Merge the pending commit to finalize our state BEFORE publishing
-            log("Finalizing group state...");
-            mdk.merge_pending_commit(&group_id)
-                .map_err(|e| JsValue::from_str(&format!("Failed to merge commit: {}", e)))?;
-
-            // Step 2: Publish evolution event (Kind:445) to notify existing members
-            log("Publishing group evolution event...");
-            client.send_event(&invite_result.evolution_event).await
-                .map_err(|e| JsValue::from_str(&format!("Failed to publish evolution: {}", e)))?;
-
-            // Step 3: Publish Welcome message if any
-            if let Some(welcome_rumors) = invite_result.welcome_rumors {
-                log(&format!("Publishing Welcome message to {}...", &member_npub[..16]));
-
-                for welcome_unsigned in welcome_rumors {
-                    // Sign the UnsignedEvent
-                    let welcome_event = welcome_unsigned.sign(&keys).await
-                        .map_err(|e| JsValue::from_str(&format!("Failed to sign Welcome: {}", e)))?;
-
-                    client.send_event(&welcome_event).await
-                        .map_err(|e| JsValue::from_str(&format!("Failed to send Welcome: {}", e)))?;
-                }
-
-                log(&format!("✅ Invite sent to {}!", &member_npub[..16]));
-            } else {
-                log(&format!("✅ Member added to group (no Welcome needed)"));
-            }
-
-            // Step 3a: Send "joined" notification message
-            log("Sending 'joined' notification to group...");
-            let joined_message = format!("{} joined the group", &member_npub);
+            // Step 1: Send "Inviting..." message to existing members (before adding new member)
+            log(&format!("Notifying existing members about invitation..."));
+            let inviting_message = format!("Inviting {} to the group...", &member_npub);
 
             let rumor = nostr::UnsignedEvent {
                 id: None,
@@ -886,21 +854,47 @@ pub fn invite_member_to_group(group_id_hex: String, member_npub: String) -> js_s
                 created_at: nostr::Timestamp::now(),
                 kind: Kind::GiftWrap,
                 tags: nostr::Tags::new(),
-                content: joined_message,
+                content: inviting_message,
             };
 
             let message_event = mdk.create_message(&group_id, rumor)
-                .map_err(|e| JsValue::from_str(&format!("Failed to create 'joined' message: {}", e)))?;
+                .map_err(|e| JsValue::from_str(&format!("Failed to create 'inviting' message: {}", e)))?;
 
             mdk.merge_pending_commit(&group_id)
-                .map_err(|e| JsValue::from_str(&format!("Failed to merge 'joined' message commit: {}", e)))?;
+                .map_err(|e| JsValue::from_str(&format!("Failed to merge 'inviting' message commit: {}", e)))?;
 
             client.send_event(&message_event).await
-                .map_err(|e| JsValue::from_str(&format!("Failed to send 'joined' message: {}", e)))?;
+                .map_err(|e| JsValue::from_str(&format!("Failed to send 'inviting' message: {}", e)))?;
 
-            log("✅ 'Joined' notification sent!");
+            log("✅ Existing members notified");
 
-            // Step 4: Add the new member to the admin list
+            // Step 2: Add member to group
+            log("Adding member to group...");
+            let invite_result = mdk.add_members(&group_id, &[newest.clone()])
+                .map_err(|e| JsValue::from_str(&format!("Failed to add member: {}", e)))?;
+
+            mdk.merge_pending_commit(&group_id)
+                .map_err(|e| JsValue::from_str(&format!("Failed to merge commit: {}", e)))?;
+
+            client.send_event(&invite_result.evolution_event).await
+                .map_err(|e| JsValue::from_str(&format!("Failed to publish evolution: {}", e)))?;
+
+            // Step 3: Publish Welcome message
+            if let Some(welcome_rumors) = invite_result.welcome_rumors {
+                log(&format!("Publishing Welcome message to {}...", &member_npub[..16]));
+
+                for welcome_unsigned in welcome_rumors {
+                    let welcome_event = welcome_unsigned.sign(&keys).await
+                        .map_err(|e| JsValue::from_str(&format!("Failed to sign Welcome: {}", e)))?;
+
+                    client.send_event(&welcome_event).await
+                        .map_err(|e| JsValue::from_str(&format!("Failed to send Welcome: {}", e)))?;
+                }
+
+                log(&format!("✅ Welcome sent to {}!", &member_npub[..16]));
+            }
+
+            // Step 4: Promote new member to admin
             log("Adding new member as admin...");
 
             // Get current group data
@@ -932,33 +926,9 @@ pub fn invite_member_to_group(group_id_hex: String, member_npub: String) -> js_s
 
             log("✅ Member added as admin!");
 
-            // Step 4a: Send "promoted to admin" notification message
-            log("Sending 'promoted to admin' notification to group...");
-            let promoted_message = format!("{} promoted to admin", &member_npub);
-
-            let rumor_promoted = nostr::UnsignedEvent {
-                id: None,
-                pubkey: keys.public_key(),
-                created_at: nostr::Timestamp::now(),
-                kind: Kind::GiftWrap,
-                tags: nostr::Tags::new(),
-                content: promoted_message,
-            };
-
-            let message_event_promoted = mdk.create_message(&group_id, rumor_promoted)
-                .map_err(|e| JsValue::from_str(&format!("Failed to create 'promoted' message: {}", e)))?;
-
-            mdk.merge_pending_commit(&group_id)
-                .map_err(|e| JsValue::from_str(&format!("Failed to merge 'promoted' message commit: {}", e)))?;
-
-            client.send_event(&message_event_promoted).await
-                .map_err(|e| JsValue::from_str(&format!("Failed to send 'promoted' message: {}", e)))?;
-
-            log("✅ 'Promoted to admin' notification sent!");
-
-            // Step 5: Send detailed invitation record (for debugging)
-            log("Sending detailed invitation record to group...");
-            let invite_message = format!("Invited {} to the group (KeyPackage: {})", &member_npub, &newest.id.to_hex()[..16]);
+            // Step 5: Send final confirmation message to everyone (including new member)
+            log("Sending confirmation to all members...");
+            let confirmation_message = format!("{} joined the group and was promoted to admin", &member_npub);
 
             // Create message rumor
             let rumor = nostr::UnsignedEvent {
@@ -967,22 +937,22 @@ pub fn invite_member_to_group(group_id_hex: String, member_npub: String) -> js_s
                 created_at: nostr::Timestamp::now(),
                 kind: Kind::GiftWrap,
                 tags: nostr::Tags::new(),
-                content: invite_message,
+                content: confirmation_message,
             };
 
             // Create encrypted message
             let message_event = mdk.create_message(&group_id, rumor)
-                .map_err(|e| JsValue::from_str(&format!("Failed to create notification message: {}", e)))?;
+                .map_err(|e| JsValue::from_str(&format!("Failed to create confirmation message: {}", e)))?;
 
             // Merge pending commit BEFORE publishing
             mdk.merge_pending_commit(&group_id)
-                .map_err(|e| JsValue::from_str(&format!("Failed to merge message commit: {}", e)))?;
+                .map_err(|e| JsValue::from_str(&format!("Failed to merge confirmation commit: {}", e)))?;
 
-            // Publish detailed invitation record
+            // Publish confirmation message
             client.send_event(&message_event).await
-                .map_err(|e| JsValue::from_str(&format!("Failed to send invitation record: {}", e)))?;
+                .map_err(|e| JsValue::from_str(&format!("Failed to send confirmation: {}", e)))?;
 
-            log("✅ Detailed invitation record sent!");
+            log("✅ Confirmation sent to all members!");
 
             // Disconnect
             let _ = client.disconnect().await;
