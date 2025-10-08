@@ -616,8 +616,8 @@ pub fn create_keypackage_and_wait_for_invite() -> js_sys::Promise {
                 // Wait for next notification from subscription
                 match notifications.recv().await {
                     Ok(notification) => {
-                        if let nostr_sdk::RelayPoolNotification::Event { event: welcome_event, .. } = notification {
-                            log(&format!("📩 Received event: {}", welcome_event.id.to_hex()));
+                        if let nostr_sdk::RelayPoolNotification::Event { relay_url, event: welcome_event, .. } = notification {
+                            log(&format!("📩 Received event: {} from relay: {}", welcome_event.id.to_hex(), relay_url));
 
                             // Check if this Welcome references our KeyPackage
                             let references_our_kp = welcome_event.tags.iter().any(|tag| {
@@ -630,10 +630,10 @@ pub fn create_keypackage_and_wait_for_invite() -> js_sys::Promise {
                                 continue;
                             }
 
-                            log("  ✅ This Welcome is for our KeyPackage!");
+                            log(&format!("  ✅ This Welcome is for our KeyPackage! (from {})", relay_url));
 
                             // Process the Welcome
-                            log(&format!("Processing Welcome: {}", welcome_event.id.to_hex()));
+                            log(&format!("Processing Welcome: {} (delivered by {})", welcome_event.id.to_hex(), relay_url));
 
                             // Convert to UnsignedEvent (compute the ID)
                             let mut rumor = nostr::UnsignedEvent {
@@ -1220,8 +1220,8 @@ pub fn subscribe_to_group_messages(group_id_hex: String, callback: js_sys::Funct
                 let mut notifications = client.notifications();
 
                 while let Ok(notification) = notifications.recv().await {
-                    if let RelayPoolNotification::Event { event, .. } = notification {
-                        log(&format!("  📩 Received event: {}", event.id.to_hex()));
+                    if let RelayPoolNotification::Event { relay_url, event, .. } = notification {
+                        log(&format!("  📩 Received event: {} from relay: {}", event.id.to_hex(), relay_url));
 
                         // Create MDK instance and process the message
                         match create_mdk().await {
@@ -1230,13 +1230,13 @@ pub fn subscribe_to_group_messages(group_id_hex: String, callback: js_sys::Funct
                                     Ok(result) => {
                                         use mdk_core::prelude::MessageProcessingResult;
                                         if let MessageProcessingResult::ApplicationMessage(msg) = result {
-                                            log(&format!("  ✅ Application message: '{}'", msg.content));
+                                            log(&format!("  ✅ Application message: '{}' (from {})", msg.content, relay_url));
                                             log(&format!("     Message group ID: {}", hex::encode(msg.mls_group_id.as_slice())));
                                             log(&format!("     Target group ID: {}", hex::encode(group_id.as_slice())));
 
                                             // Check if this message belongs to the current group
                                             if msg.mls_group_id == group_id {
-                                                log("  🎯 Message matches current group! Calling callback...");
+                                                log(&format!("  🎯 Message matches current group! (delivered by {})", relay_url));
 
                                                 // Prepare callback data
                                                 let msg_data = MessageCallback {
