@@ -549,8 +549,46 @@
             }
         }
 
+        // Track which groups we've already subscribed to
+        const subscribedGroups = new Set();
+
+        async function subscribeToAllGroups() {
+            try {
+                const groupsJson = await get_groups();
+                const groups = JSON.parse(groupsJson);
+
+                for (const group of groups) {
+                    // Skip if already subscribed
+                    if (subscribedGroups.has(group.id)) {
+                        continue;
+                    }
+
+                    console.log(`📡 Subscribing to group: ${group.name} (${group.id.substring(0, 16)}...)`);
+
+                    // Subscribe and mark as subscribed
+                    await subscribe_to_group_messages(group.id, async (message) => {
+                        console.log(`📨 Message in ${group.name}:`, message);
+
+                        // If this group's chat is currently open, add the message
+                        if (currentChatGroupId === group.id) {
+                            await addMessageToChat(message);
+                        }
+
+                        // Refresh groups list to update "Last activity" timestamp
+                        await refreshGroups();
+                    });
+
+                    subscribedGroups.add(group.id);
+                    console.log(`✅ Subscribed to group: ${group.name}`);
+                }
+            } catch (err) {
+                console.error('Failed to subscribe to groups:', err);
+            }
+        }
+
         async function initializeGroups() {
             await refreshGroups();
+            await subscribeToAllGroups();
         }
 
         window.refreshGroups = async function() {
@@ -624,6 +662,8 @@
                     statusDiv.innerHTML = `<div class="success">✅ Joined ${count} new group(s)!</div>`;
                     // Refresh groups list
                     await refreshGroups();
+                    // Subscribe to new groups
+                    await subscribeToAllGroups();
                 } else {
                     statusDiv.innerHTML = '<div class="success">No new invites found</div>';
                 }
@@ -675,11 +715,7 @@
             // Load messages
             await loadMessages(groupId);
 
-            // Subscribe to new messages
-            await subscribe_to_group_messages(groupId, async (message) => {
-                console.log('📨 New message received:', message);
-                await addMessageToChat(message);
-            });
+            // Note: Subscription already active from startup (subscribeToAllGroups)
         };
 
         window.closeChat = function() {
@@ -1023,6 +1059,7 @@
                 setTimeout(async () => {
                     document.getElementById('wait-invite-modal').style.display = 'none';
                     await refreshGroups();
+                    await subscribeToAllGroups();
                     // Switch to groups tab
                     showSection('groups');
                 }, 2000);
@@ -1084,6 +1121,7 @@
                 setTimeout(async () => {
                     closeCreateGroupModal();
                     await refreshGroups();
+                    await subscribeToAllGroups();
                     showSection('groups');
                 }, 2000);
             } catch (err) {
