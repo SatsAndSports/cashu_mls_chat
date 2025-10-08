@@ -23,27 +23,33 @@ use mdk_storage_traits::GroupId;
 
 // Relay URLs
 const RELAYS: &[&str] = &[
-    "ws://localhost:8080",
-    "wss://relay.nostr.band",
-    "wss://nostr.bitcoiner.social",
-    "wss://nostr.land",
-    "wss://relay.primal.net",
-    "wss://nostr.strits.dk",
-    "wss://nostr.oxtr.dev",
-    "wss://nostr-pub.wellorder.net",
-    "wss://orangesync.tech",
-    "wss://relay.snort.social",
-    "wss://vitor.nostr1.com",
-    "wss://nostr.chaima.info",
-    "wss://theforest.nostr1.com",
-    "wss://articles.layer3.news",
-    "wss://nostr-01.yakihonne.com",
-    "wss://wot.nostr.party",
-    "wss://no.str.cr",
-    "wss://offchain.pub",
-    "wss://primus.nostr1.com",
-    "wss://bitcoiner.social",
-    "wss://relay.jeffg.fyi",
+    //"wss://relay.damus.io", // rate limited
+    //"wss://nos.lol", // pow 28
+    //
+    //"ws://localhost:8080", // WORKS of course
+    "wss://orangesync.tech", // still working
+    "wss://nostr.chaima.info", // works a bit at least
+    "wss://relay.primal.net", // works a bit at least
+    //"wss://nostr.oxtr.dev", // works a bit at least
+
+    //"wss://vitor.nostr1.com", // works a bit
+    //"wss://nostr-pub.wellorder.net", // works a bit
+    //"wss://nostr-01.yakihonne.com",
+    //"wss://relay.jeffg.fyi",
+    //"wss://articles.layer3.news",
+    //"wss://nostr.bitcoiner.social",
+    //"wss://bitcoiner.social",
+    //"wss://relay.snort.social",
+    //"wss://offchain.pub",
+    //"wss://no.str.cr",
+
+    //"wss://relay.nostr.band", // not really. accepts the key package, but otherwise doesn't help
+   
+    //"wss://nostr.land", // no
+    //"wss://nostr.strits.dk", // no
+    //"wss://theforest.nostr1.com", // no
+    //"wss://wot.nostr.party", // no
+    //"wss://primus.nostr1.com", // no
 ];
 
 /// Helper function to create MDK instance
@@ -774,8 +780,16 @@ pub fn create_group_with_members(name: String, description: String, member_npubs
                 let welcome_event = welcome_unsigned.sign(&keys).await
                     .map_err(|e| JsValue::from_str(&format!("Failed to sign Welcome: {}", e)))?;
 
-                client.send_event(&welcome_event).await
+                let send_result = client.send_event(&welcome_event).await
                     .map_err(|e| JsValue::from_str(&format!("Failed to send Welcome: {}", e)))?;
+
+                log("Publishing Welcome message:");
+                for relay_url in send_result.success.iter() {
+                    log(&format!("  ✓ {} accepted Welcome", relay_url));
+                }
+                for (relay_url, error) in send_result.failed.iter() {
+                    log(&format!("  ✗ {} rejected Welcome: {}", relay_url, error));
+                }
             }
 
             log(&format!("✅ All Welcome messages published!"));
@@ -887,8 +901,15 @@ pub fn invite_member_to_group(group_id_hex: String, member_npub: String) -> js_s
                     let welcome_event = welcome_unsigned.sign(&keys).await
                         .map_err(|e| JsValue::from_str(&format!("Failed to sign Welcome: {}", e)))?;
 
-                    client.send_event(&welcome_event).await
+                    let send_result = client.send_event(&welcome_event).await
                         .map_err(|e| JsValue::from_str(&format!("Failed to send Welcome: {}", e)))?;
+
+                    for relay_url in send_result.success.iter() {
+                        log(&format!("  ✓ {} accepted Welcome", relay_url));
+                    }
+                    for (relay_url, error) in send_result.failed.iter() {
+                        log(&format!("  ✗ {} rejected Welcome: {}", relay_url, error));
+                    }
                 }
 
                 log(&format!("✅ Welcome sent to {}!", &member_npub[..16]));
