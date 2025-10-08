@@ -21,37 +21,6 @@ use cdk::mint_url::MintUrl;
 use mdk_core::MDK;
 use mdk_storage_traits::GroupId;
 
-// Relay URLs
-const RELAYS: &[&str] = &[
-    //"wss://relay.damus.io", // rate limited
-    //"wss://nos.lol", // pow 28
-    //
-    //"ws://localhost:8080", // WORKS of course
-    "wss://orangesync.tech", // still working
-    "wss://nostr.chaima.info", // works a bit at least
-    "wss://relay.primal.net", // works a bit at least
-    //"wss://nostr.oxtr.dev", // works a bit at least
-
-    //"wss://vitor.nostr1.com", // works a bit
-    //"wss://nostr-pub.wellorder.net", // works a bit
-    //"wss://nostr-01.yakihonne.com",
-    //"wss://relay.jeffg.fyi",
-    //"wss://articles.layer3.news",
-    //"wss://nostr.bitcoiner.social",
-    //"wss://bitcoiner.social",
-    //"wss://relay.snort.social",
-    //"wss://offchain.pub",
-    //"wss://no.str.cr",
-
-    //"wss://relay.nostr.band", // not really. accepts the key package, but otherwise doesn't help
-   
-    //"wss://nostr.land", // no
-    //"wss://nostr.strits.dk", // no
-    //"wss://theforest.nostr1.com", // no
-    //"wss://wot.nostr.party", // no
-    //"wss://primus.nostr1.com", // no
-];
-
 /// Helper function to create MDK instance
 async fn create_mdk() -> Result<MDK<MdkHybridStorage>, JsValue> {
     let storage = MdkHybridStorage::new().await?;
@@ -182,6 +151,135 @@ pub fn clear_keys() -> Result<(), JsValue> {
 #[wasm_bindgen]
 pub fn log(message: &str) {
     web_sys::console::log_1(&JsValue::from_str(message));
+}
+
+// Default relays if none are configured
+const DEFAULT_RELAYS: &[&str] = &[
+    "wss://orangesync.tech",
+    "wss://nostr.chaima.info",
+    "wss://relay.primal.net",
+];
+
+/// Internal helper to get relays list (for Rust usage)
+fn get_relays_internal() -> Result<Vec<String>, JsValue> {
+    let storage = get_local_storage()?;
+
+    match storage.get_item("nostr_relays")? {
+        Some(json_str) => {
+            serde_json::from_str::<Vec<String>>(&json_str)
+                .map_err(|e| JsValue::from_str(&format!("Failed to parse relays: {}", e)))
+        }
+        None => {
+            // Return default relays
+            Ok(DEFAULT_RELAYS.iter().map(|s| s.to_string()).collect())
+        }
+    }
+}
+
+/// Get the list of configured relays
+/// Returns a Promise that resolves to a JSON array of relay URLs
+#[wasm_bindgen]
+pub fn get_relays() -> js_sys::Promise {
+    future_to_promise(async move {
+        let relays = get_relays_internal()?;
+        let json = serde_json::to_string(&relays)
+            .map_err(|e| JsValue::from_str(&format!("Failed to serialize relays: {}", e)))?;
+        Ok(JsValue::from_str(&json))
+    })
+}
+
+/// Add a relay to the configured list (with validation)
+/// Returns a Promise that resolves when the relay is added
+#[wasm_bindgen]
+pub fn add_relay(url: String) -> js_sys::Promise {
+    future_to_promise(async move {
+        // Validate URL format
+        if !url.starts_with("ws://") && !url.starts_with("wss://") {
+            return Err(JsValue::from_str("Relay URL must start with ws:// or wss://"));
+        }
+
+        let relay_url = RelayUrl::parse(&url)
+            .map_err(|e| JsValue::from_str(&format!("Invalid relay URL: {}", e)))?;
+
+        // Test connection (simple validation - timeout not supported in WASM)
+        log(&format!("Testing connection to {}...", url));
+        let client = Client::default();
+        client.add_relay(relay_url.clone()).await
+            .map_err(|e| JsValue::from_str(&format!("Failed to add relay: {}", e)))?;
+
+        client.connect().await;
+
+        // Give it a moment to connect, then check status
+        wasm_bindgen_futures::JsFuture::from(js_sys::Promise::new(&mut |resolve, _| {
+            web_sys::window()
+                .unwrap()
+                .set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, 2000)
+                .unwrap();
+        })).await.ok();
+
+        // Check if relay is actually connected
+        match client.relay(relay_url.clone()).await {
+            Ok(relay) => {
+                if relay.is_connected() {
+                    log(&format!("✓ Successfully connected to {}", url));
+                } else {
+                    let _ = client.disconnect().await;
+                    return Err(JsValue::from_str(&format!("Failed to connect to relay: {}", url)));
+                }
+            }
+            Err(e) => {
+                let _ = client.disconnect().await;
+                return Err(JsValue::from_str(&format!("Relay error: {}", e)));
+            }
+        }
+
+        let _ = client.disconnect().await;
+
+        // Add to list
+        let mut relays = get_relays_internal()?;
+
+        if relays.contains(&url) {
+            return Err(JsValue::from_str("Relay already in list"));
+        }
+
+        relays.push(url.clone());
+
+        let storage = get_local_storage()?;
+        let json = serde_json::to_string(&relays)
+            .map_err(|e| JsValue::from_str(&format!("Failed to serialize relays: {}", e)))?;
+        storage.set_item("nostr_relays", &json)?;
+
+        log(&format!("✅ Added relay: {}", url));
+        Ok(JsValue::from_str("success"))
+    })
+}
+
+/// Remove a relay from the configured list
+/// Returns a Promise that resolves when the relay is removed
+#[wasm_bindgen]
+pub fn remove_relay(url: String) -> js_sys::Promise {
+    future_to_promise(async move {
+        let mut relays = get_relays_internal()?;
+
+        let original_len = relays.len();
+        relays.retain(|r| r != &url);
+
+        if relays.len() == original_len {
+            return Err(JsValue::from_str("Relay not found in list"));
+        }
+
+        if relays.is_empty() {
+            return Err(JsValue::from_str("Cannot remove last relay"));
+        }
+
+        let storage = get_local_storage()?;
+        let json = serde_json::to_string(&relays)
+            .map_err(|e| JsValue::from_str(&format!("Failed to serialize relays: {}", e)))?;
+        storage.set_item("nostr_relays", &json)?;
+
+        log(&format!("✅ Removed relay: {}", url));
+        Ok(JsValue::from_str("success"))
+    })
 }
 
 /// Initialize a real CDK wallet with hybrid in-memory + localStorage storage
@@ -386,7 +484,8 @@ pub fn fetch_welcome_events() -> js_sys::Promise {
 
             // Create client and connect to relays
             let client = Client::default();
-            for relay in RELAYS {
+            let relays = get_relays_internal()?;
+            for relay in &relays {
                 if let Ok(url) = RelayUrl::parse(relay) {
                     let _ = client.add_relay(url).await;
                 }
@@ -564,7 +663,8 @@ pub fn create_keypackage_and_wait_for_invite() -> js_sys::Promise {
 
             // Step 1: Create KeyPackage
             log("Creating KeyPackage...");
-            let relay_urls: Vec<RelayUrl> = RELAYS
+            let relays = get_relays_internal()?;
+            let relay_urls: Vec<RelayUrl> = relays
                 .iter()
                 .filter_map(|r| RelayUrl::parse(r).ok())
                 .collect();
@@ -584,7 +684,8 @@ pub fn create_keypackage_and_wait_for_invite() -> js_sys::Promise {
 
             // Step 3: Connect to relays and start listening for Welcomes BEFORE publishing
             let client = Client::default();
-            for relay in RELAYS {
+            let relays = get_relays_internal()?;
+            for relay in &relays {
                 if let Ok(url) = RelayUrl::parse(relay) {
                     let _ = client.add_relay(url).await;
                 }
@@ -704,7 +805,8 @@ pub fn create_group_with_members(name: String, description: String, member_npubs
             log(&format!("Fetching KeyPackages for {} member(s)...", member_npubs.len()));
 
             let client = Client::default();
-            for relay in RELAYS {
+            let relays = get_relays_internal()?;
+            for relay in &relays {
                 if let Ok(url) = RelayUrl::parse(relay) {
                     let _ = client.add_relay(url).await;
                 }
@@ -747,7 +849,8 @@ pub fn create_group_with_members(name: String, description: String, member_npubs
 
             // Create group config
             use mdk_core::prelude::*;
-            let relay_urls: Vec<RelayUrl> = RELAYS
+            let relays = get_relays_internal()?;
+            let relay_urls: Vec<RelayUrl> = relays
                 .iter()
                 .filter_map(|r| RelayUrl::parse(r).ok())
                 .collect();
@@ -826,7 +929,8 @@ pub fn invite_member_to_group(group_id_hex: String, member_npub: String) -> js_s
             log(&format!("Fetching KeyPackage for {}...", &member_npub[..16]));
 
             let client = Client::default();
-            for relay in RELAYS {
+            let relays = get_relays_internal()?;
+            for relay in &relays {
                 if let Ok(url) = RelayUrl::parse(relay) {
                     let _ = client.add_relay(url).await;
                 }
@@ -1085,7 +1189,8 @@ pub fn send_message_to_group(group_id_hex: String, message_content: String) -> j
             // Publish to relays
             log("  Connecting to relays...");
             let client = Client::default();
-            for relay in RELAYS {
+            let relays = get_relays_internal()?;
+            for relay in &relays {
                 if let Ok(url) = RelayUrl::parse(relay) {
                     log(&format!("    Adding relay: {}", relay));
                     let _ = client.add_relay(url).await;
@@ -1201,7 +1306,8 @@ pub fn subscribe_to_group_messages(group_id_hex: String, callback: js_sys::Funct
 
             // Create client and connect to relays
             let client = Client::default();
-            for relay in RELAYS {
+            let relays = get_relays_internal()?;
+            for relay in &relays {
                 if let Ok(url) = RelayUrl::parse(relay) {
                     log(&format!("  Adding relay: {}", relay));
                     let _ = client.add_relay(url).await;
