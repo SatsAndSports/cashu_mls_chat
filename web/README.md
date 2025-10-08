@@ -73,6 +73,25 @@ Coming soon:
 
 This is not critical for normal usage (commit conflicts are rare) but should be addressed for production.
 
+### Nostr Group ID Stability
+
+**Current behavior:** The `nostr_group_id` field is randomly generated once at group creation and remains stable. All Kind 445 events (messages, commits) are tagged with `#h:<nostr_group_id>`, which allows efficient relay filtering.
+
+**Implementation details:**
+- `mls_group_id`: Never changes (primary key in storage)
+- `nostr_group_id`: Used in event tags, has a setter method but no code calls it
+- Current subscription filter: `kind:445` + `#h:<nostr_group_id>`
+
+**Potential issue:** The storage type comment says `nostr_group_id` "can change over time" and a setter method exists (`set_nostr_group_id()`), suggesting this was designed to be mutable. However, no production code actually changes it.
+
+**If `nostr_group_id` changes in the future:**
+- Old messages would have `#h:<old_id>`
+- New messages would have `#h:<new_id>`
+- Current subscription would only see messages with the current ID
+- Would need to track ID history and subscribe to all historical IDs, or remove the `#h` filter
+
+**Recommendation:** Clarify whether `nostr_group_id` is intended to change. If yes, implement multi-ID subscription tracking. If no, mark it as immutable and remove the setter.
+
 ## Notes
 
 The CDK wallet integration is currently a placeholder because:
