@@ -2446,7 +2446,7 @@ pub fn get_messages_for_group(group_id_hex: String) -> js_sys::Promise {
             let messages_json: Vec<MessageJson> = messages.iter().map(|msg| {
                 MessageJson {
                     id: msg.id.to_hex(),
-                    pubkey: msg.pubkey.to_hex(),
+                    pubkey: msg.pubkey.to_bech32().unwrap_or_else(|_| msg.pubkey.to_hex()),
                     content: msg.content.clone(),
                     created_at: msg.created_at.as_u64(),
                     state: msg.state.to_string(),
@@ -2552,7 +2552,7 @@ pub fn subscribe_to_group_messages(group_id_hex: String, callback: js_sys::Funct
                                                 // Prepare callback data
                                                 let msg_data = MessageCallback {
                                                     id: msg.id.to_hex(),
-                                                    pubkey: msg.pubkey.to_hex(),
+                                                    pubkey: msg.pubkey.to_bech32().unwrap_or_else(|_| msg.pubkey.to_hex()),
                                                     content: msg.content,
                                                     created_at: msg.created_at.as_u64(),
                                                     state: msg.state.to_string(),
