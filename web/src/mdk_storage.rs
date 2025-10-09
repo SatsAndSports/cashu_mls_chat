@@ -280,8 +280,7 @@ impl MdkHybridStorage {
             openmls_storage: Mutex::new(openmls_storage),
         };
 
-        // Save immediately to ensure storage is initialized
-        storage.save_snapshot()?;
+        // No need to save on init - we just loaded from localStorage
         log("Initialized MDK storage");
 
         Ok(storage)

@@ -1960,12 +1960,12 @@ pub fn get_messages_for_group(group_id_hex: String) -> js_sys::Promise {
                 .map_err(|e| JsValue::from_str(&format!("Invalid group ID hex: {}", e)))?;
             let group_id = GroupId::from_slice(&group_id_bytes);
 
-            // Get storage
-            let storage = MdkHybridStorage::new().await?;
+            // Get cached storage (don't create new instance!)
+            let storage = get_or_create_storage().await?;
 
             // Get messages using the GroupStorage trait
             use mdk_storage_traits::groups::GroupStorage;
-            let messages = storage.messages(&group_id)
+            let messages = storage.inner().messages(&group_id)
                 .map_err(|e| JsValue::from_str(&format!("Failed to get messages: {}", e)))?;
 
             // Convert messages to JSON
