@@ -846,6 +846,7 @@
             try {
                 const balancesJson = await get_all_mint_balances();
                 const balances = JSON.parse(balancesJson);
+                const currentMint = await get_current_mint();
 
                 const listDiv = document.getElementById('mint-balances-list');
 
@@ -855,12 +856,13 @@
                 }
 
                 listDiv.innerHTML = balances.map(b => {
+                    const isCurrent = b.mint === currentMint;
                     const trustBadge = b.is_trusted
                         ? '<span style="color: green; margin-left: 10px;">✓ Trusted</span>'
                         : '<span style="color: #ff6600; margin-left: 10px;">⚠️ Untrusted</span>';
 
                     return `
-                        <div style="background: #f9f9f9; border: 1px solid #ddd; border-radius: 4px; padding: 15px; margin: 10px 0;">
+                        <div style="background: ${isCurrent ? '#e6f3ff' : '#f9f9f9'}; border: 1px solid ${isCurrent ? '#0066cc' : '#ddd'}; border-radius: 4px; padding: 15px; margin: 10px 0;">
                             <div style="display: flex; justify-content: space-between; align-items: center;">
                                 <div style="flex: 1; min-width: 0;">
                                     <code style="font-size: 0.9em; word-break: break-all;">${b.mint}</code>
@@ -869,7 +871,9 @@
                                 <strong style="font-size: 1.2em; margin-left: 15px;">${b.balance} sats</strong>
                             </div>
                             <div style="margin-top: 10px;">
-                                <button onclick="setCurrentMint('${b.mint}')" style="font-size: 0.9em; padding: 5px 15px;">Set as Current</button>
+                                ${isCurrent
+                                    ? '<span style="color: #0066cc; font-weight: bold; font-size: 0.9em;">● Current</span>'
+                                    : '<button onclick="setCurrentMint(\'' + b.mint + '\')" style="font-size: 0.9em; padding: 5px 15px;">Set as Current</button>'}
                             </div>
                         </div>
                     `;
@@ -884,7 +888,6 @@
             try {
                 const mintsJson = await get_trusted_mints();
                 const mints = JSON.parse(mintsJson);
-                const currentMint = await get_current_mint();
 
                 const listDiv = document.getElementById('trusted-mints-list');
 
@@ -894,11 +897,9 @@
                 }
 
                 listDiv.innerHTML = mints.map(mint => {
-                    const isCurrent = mint === currentMint;
                     return `
-                        <div style="background: ${isCurrent ? '#e6f3ff' : '#f9f9f9'}; border: 1px solid ${isCurrent ? '#0066cc' : '#ddd'}; border-radius: 4px; padding: 10px; margin: 8px 0; display: flex; justify-content: space-between; align-items: center;">
+                        <div style="background: #f9f9f9; border: 1px solid #ddd; border-radius: 4px; padding: 10px; margin: 8px 0; display: flex; justify-content: space-between; align-items: center;">
                             <code style="flex: 1; font-size: 0.9em; word-break: break-all;">${mint}</code>
-                            ${isCurrent ? '<span style="color: #0066cc; margin: 0 10px; font-weight: bold;">● Current</span>' : ''}
                             <button onclick="removeTrustedMint('${mint}')" style="background: #dc3545; padding: 5px 15px; font-size: 0.85em; margin-left: 10px;">Remove</button>
                         </div>
                     `;
@@ -966,7 +967,6 @@
         window.setCurrentMint = async function(mintUrl) {
             try {
                 await set_current_mint(mintUrl);
-                alert(`Current mint set to:\n${mintUrl}`);
                 await refreshTrustedMints();
                 await refreshMintBalances();
             } catch (err) {
