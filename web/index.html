@@ -766,6 +766,7 @@
             add_relay,
             remove_relay,
             log,
+            save_storage,
             // Mint management functions
             get_trusted_mints,
             add_trusted_mint,
@@ -941,6 +942,23 @@
 
                 document.getElementById('buttons').style.display = 'block';
                 document.getElementById('status').innerHTML = '<div class="success">✓ Ready</div>';
+
+                // Set up periodic save (every 30 seconds) for received messages
+                setInterval(async () => {
+                    try {
+                        await save_storage();
+                        console.log('🔄 Periodic save completed');
+                    } catch (err) {
+                        console.error('❌ Periodic save failed:', err);
+                    }
+                }, 30000);
+
+                // Save on page unload
+                window.addEventListener('beforeunload', () => {
+                    // Note: This is synchronous, but save_storage is async
+                    // We can't await here, but the browser will give us a brief window
+                    save_storage().catch(err => console.error('Failed to save on unload:', err));
+                });
 
                 // Restore state from URL hash
                 await restoreFromHash();

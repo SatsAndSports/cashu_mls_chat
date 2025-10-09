@@ -333,10 +333,8 @@ impl GroupStorage for MdkHybridStorage {
         let mut state = self.state.lock().unwrap();
         state.groups_by_nostr_id.insert(group.nostr_group_id, group.clone());
         state.groups.insert(group.mls_group_id.clone(), group);
-        drop(state);
-
-        // Save to localStorage
-        self.save_snapshot().map_err(to_group_error)
+        // Don't auto-save - will be saved explicitly at strategic points
+        Ok(())
     }
 
     fn messages(&self, group_id: &GroupId) -> Result<Vec<Message>, GroupError> {
@@ -376,9 +374,8 @@ impl GroupStorage for MdkHybridStorage {
             })
             .collect();
         state.group_relays.insert(group_id.clone(), group_relays);
-        drop(state);
-
-        self.save_snapshot().map_err(to_group_error)
+        // Don't auto-save - will be saved explicitly at strategic points
+        Ok(())
     }
 
     fn get_group_exporter_secret(
@@ -400,8 +397,8 @@ impl GroupStorage for MdkHybridStorage {
         self.state.lock().unwrap()
             .group_exporter_secrets
             .insert(key, group_exporter_secret);
-
-        self.save_snapshot().map_err(to_group_error)
+        // Don't auto-save - will be saved explicitly at strategic points
+        Ok(())
     }
 }
 
@@ -427,10 +424,8 @@ impl MessageStorage for MdkHybridStorage {
                 group_messages.push(message);
             }
         }
-
-        drop(state);
-
-        self.save_snapshot().map_err(to_message_error)
+        // Don't auto-save - will be saved explicitly at strategic points
+        Ok(())
     }
 
     fn find_message_by_event_id(&self, event_id: &EventId) -> Result<Option<Message>, MessageError> {
@@ -444,8 +439,8 @@ impl MessageStorage for MdkHybridStorage {
         self.state.lock().unwrap()
             .processed_messages
             .insert(processed_message.wrapper_event_id, processed_message);
-
-        self.save_snapshot().map_err(to_message_error)
+        // Don't auto-save - will be saved explicitly at strategic points
+        Ok(())
     }
 
     fn find_processed_message_by_event_id(
@@ -465,8 +460,8 @@ impl WelcomeStorage for MdkHybridStorage {
         self.state.lock().unwrap()
             .welcomes
             .insert(welcome.id, welcome);
-
-        self.save_snapshot().map_err(to_welcome_error)
+        // Don't auto-save - will be saved explicitly at strategic points
+        Ok(())
     }
 
     fn find_welcome_by_event_id(&self, event_id: &EventId) -> Result<Option<Welcome>, WelcomeError> {
@@ -490,8 +485,8 @@ impl WelcomeStorage for MdkHybridStorage {
         self.state.lock().unwrap()
             .processed_welcomes
             .insert(processed_welcome.wrapper_event_id, processed_welcome);
-
-        self.save_snapshot().map_err(to_welcome_error)
+        // Don't auto-save - will be saved explicitly at strategic points
+        Ok(())
     }
 
     fn find_processed_welcome_by_event_id(

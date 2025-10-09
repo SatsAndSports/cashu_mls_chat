@@ -50,6 +50,23 @@ async fn create_mdk() -> Result<MDK<SharedMdkStorage>, JsValue> {
     Ok(MDK::new(storage))
 }
 
+/// Save storage if there are any pending changes
+/// This is meant to be called periodically from JavaScript (e.g., every 30 seconds)
+#[wasm_bindgen]
+pub fn save_storage() -> js_sys::Promise {
+    future_to_promise(async move {
+        let result = async {
+            let storage = get_or_create_storage().await?;
+            storage.inner().save_snapshot()
+                .map_err(|e| JsValue::from_str(&format!("Failed to save storage: {:?}", e)))?;
+            Ok::<(), JsValue>(())
+        }
+        .await;
+
+        result.map(|_| JsValue::undefined())
+    })
+}
+
 /// Helper function to get Nostr keys
 fn get_keys() -> Result<Keys, JsValue> {
     let storage = get_local_storage()?;
@@ -1123,6 +1140,11 @@ pub fn create_keypackage_and_wait_for_invite() -> js_sys::Promise {
                             mdk.accept_welcome(&welcome)
                                 .map_err(|e| JsValue::from_str(&format!("Failed to accept Welcome: {}", e)))?;
 
+                            // Explicitly save after accepting Welcome (critical operation)
+                            let storage = get_or_create_storage().await?;
+                            storage.inner().save_snapshot()
+                                .map_err(|e| JsValue::from_str(&format!("Failed to save after accept_welcome: {:?}", e)))?;
+
                             log(&format!("✅ Joined group: {}", welcome.group_name));
 
                             // Disconnect and return
@@ -1379,6 +1401,11 @@ pub fn process_welcome_event(welcome_event_id: String, kp_event_id: String) -> j
             log("  Accepting Welcome (joining group)...");
             mdk.accept_welcome(&welcome)
                 .map_err(|e| JsValue::from_str(&format!("Failed to accept Welcome: {}", e)))?;
+
+            // Explicitly save after accepting Welcome (critical operation)
+            let storage = get_or_create_storage().await?;
+            storage.inner().save_snapshot()
+                .map_err(|e| JsValue::from_str(&format!("Failed to save after accept_welcome: {:?}", e)))?;
 
             log(&format!("✅ Successfully joined group: {}", group_name));
 
@@ -1689,6 +1716,12 @@ pub fn create_group_with_members(name: String, description: String, member_npubs
 
             log(&format!("✅ All Welcome messages published!"));
 
+            // Explicitly save after creating group (critical operation)
+            let storage = get_or_create_storage().await?;
+            storage.inner().save_snapshot()
+                .map_err(|e| JsValue::from_str(&format!("Failed to save after create_group: {:?}", e)))?;
+            log("✓ State saved to storage");
+
             // Disconnect
             let _ = client.disconnect().await;
 
@@ -1878,6 +1911,12 @@ pub fn invite_member_to_group(group_id_hex: String, member_npub: String) -> js_s
             mdk.merge_pending_commit(&group_id)
                 .map_err(|e| JsValue::from_str(&format!("Failed to merge confirmation commit: {}", e)))?;
 
+            // Explicitly save after inviting member (critical operation)
+            let storage = get_or_create_storage().await?;
+            storage.inner().save_snapshot()
+                .map_err(|e| JsValue::from_str(&format!("Failed to save after invite_member: {:?}", e)))?;
+            log("✓ State saved to storage");
+
             // Publish confirmation message
             client.send_event(&message_event).await
                 .map_err(|e| JsValue::from_str(&format!("Failed to send confirmation: {}", e)))?;
@@ -1945,7 +1984,11 @@ pub fn process_pending_welcomes() -> js_sys::Promise {
                 }
             }
 
+            // Explicitly save after accepting all Welcomes (critical operation)
             if accepted > 0 {
+                let storage = get_or_create_storage().await?;
+                storage.inner().save_snapshot()
+                    .map_err(|e| JsValue::from_str(&format!("Failed to save after accept_welcome: {:?}", e)))?;
                 log(&format!("✅ Joined {} new group(s)", accepted));
             } else {
                 log("No new groups to join");
@@ -2019,6 +2062,12 @@ pub fn send_message_to_group(group_id_hex: String, message_content: String) -> j
             mdk.merge_pending_commit(&group_id)
                 .map_err(|e| JsValue::from_str(&format!("Failed to merge commit: {}", e)))?;
             log("  ✓ State finalized");
+
+            // Explicitly save after sending message (critical operation)
+            let storage = get_or_create_storage().await?;
+            storage.inner().save_snapshot()
+                .map_err(|e| JsValue::from_str(&format!("Failed to save after send_message: {:?}", e)))?;
+            log("  ✓ State saved to storage");
 
             log("  Publishing message event...");
             client.send_event(&message_event).await
