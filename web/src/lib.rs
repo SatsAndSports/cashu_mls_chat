@@ -50,6 +50,14 @@ async fn create_mdk() -> Result<MDK<SharedMdkStorage>, JsValue> {
     Ok(MDK::new(storage))
 }
 
+/// Clear the in-memory storage cache (call this when changing identity)
+#[wasm_bindgen]
+pub async fn clear_storage_cache() {
+    let mut cache = STORAGE_CACHE.lock().await;
+    *cache = None;
+    log("🗑️  Cleared in-memory storage cache");
+}
+
 /// Save storage if there are any pending changes
 /// This is meant to be called periodically from JavaScript (e.g., every 30 seconds)
 #[wasm_bindgen]
@@ -1739,6 +1747,93 @@ pub fn create_group_with_members(name: String, description: String, member_npubs
     })
 }
 
+/// Fetch KeyPackages for a given npub (for progressive UI updates)
+#[wasm_bindgen]
+pub fn fetch_keypackages_for_npub(member_npub: String) -> js_sys::Promise {
+    future_to_promise(async move {
+        let result = async {
+            let member_pubkey = nostr::PublicKey::from_bech32(&member_npub)
+                .map_err(|e| JsValue::from_str(&format!("Invalid npub: {}", e)))?;
+
+            let client = create_connected_client().await?;
+
+            let filter = nostr::Filter::new()
+                .kind(Kind::Custom(443))
+                .author(member_pubkey)
+                .limit(10);
+
+            let events = client.fetch_events(filter, Duration::from_secs(10)).await
+                .map_err(|e| JsValue::from_str(&format!("Failed to fetch KeyPackages: {}", e)))?;
+
+            let _ = client.disconnect().await;
+
+            let keypackages: Vec<_> = events.iter().map(|kp| {
+                serde_json::json!({
+                    "event_id": kp.id.to_hex(),
+                    "created_at": kp.created_at.as_u64(),
+                })
+            }).collect();
+
+            let result = serde_json::json!({
+                "total_found": events.len(),
+                "keypackages": keypackages,
+            });
+
+            Ok::<String, JsValue>(result.to_string())
+        }.await;
+
+        result.map(|json| JsValue::from_str(&json))
+    })
+}
+
+/// Fetch deletion events for a given npub (for progressive UI updates)
+#[wasm_bindgen]
+pub fn fetch_deletions_for_npub(member_npub: String) -> js_sys::Promise {
+    future_to_promise(async move {
+        let result = async {
+            let member_pubkey = nostr::PublicKey::from_bech32(&member_npub)
+                .map_err(|e| JsValue::from_str(&format!("Invalid npub: {}", e)))?;
+
+            let client = create_connected_client().await?;
+
+            let deletion_filter = nostr::Filter::new()
+                .kind(Kind::EventDeletion)
+                .author(member_pubkey)
+                .limit(50);
+
+            let deletion_events = client.fetch_events(deletion_filter, Duration::from_secs(5)).await
+                .map_err(|e| JsValue::from_str(&format!("Failed to fetch deletions: {}", e)))?;
+
+            let _ = client.disconnect().await;
+
+            let deletions: Vec<_> = deletion_events.iter().map(|del| {
+                let referenced_ids: Vec<String> = del.tags.iter().filter_map(|tag| {
+                    let tag_vec = tag.clone().to_vec();
+                    tag_vec.get(0)
+                        .filter(|&kind| kind == "e")
+                        .and_then(|_| tag_vec.get(1))
+                        .map(|s| s.clone())
+                }).collect();
+
+                serde_json::json!({
+                    "event_id": del.id.to_hex(),
+                    "created_at": del.created_at.as_u64(),
+                    "references": referenced_ids,
+                })
+            }).collect();
+
+            let result = serde_json::json!({
+                "total_found": deletion_events.len(),
+                "deletions": deletions,
+            });
+
+            Ok::<String, JsValue>(result.to_string())
+        }.await;
+
+        result.map(|json| JsValue::from_str(&json))
+    })
+}
+
 /// Invite a member to an existing group by their npub
 /// Returns a Promise that resolves when the invite is sent
 #[wasm_bindgen]
@@ -1959,18 +2054,51 @@ pub fn invite_member_to_group(group_id_hex: String, member_npub: String) -> js_s
             // Disconnect
             let _ = client.disconnect().await;
 
-            // Return invitation details for tracking
+            // Return detailed invitation information
             let group_name = if group.name.is_empty() {
                 "Unnamed Group".to_string()
             } else {
                 group.name.clone()
             };
 
+            // Build detailed keypackage info
+            let keypackages: Vec<_> = events.iter().map(|kp| {
+                serde_json::json!({
+                    "event_id": kp.id.to_hex(),
+                    "created_at": kp.created_at.as_u64(),
+                    "deleted": deleted_ids.contains(&kp.id),
+                })
+            }).collect();
+
+            // Build deletion event info
+            let deletions: Vec<_> = deletion_events.iter().map(|del| {
+                let referenced_ids: Vec<String> = del.tags.iter().filter_map(|tag| {
+                    let tag_vec = tag.clone().to_vec();
+                    tag_vec.get(0)
+                        .filter(|&kind| kind == "e")
+                        .and_then(|_| tag_vec.get(1))
+                        .map(|s| s.clone())
+                }).collect();
+
+                serde_json::json!({
+                    "event_id": del.id.to_hex(),
+                    "created_at": del.created_at.as_u64(),
+                    "references": referenced_ids,
+                })
+            }).collect();
+
             let result = serde_json::json!({
                 "success": true,
                 "invitee_npub": member_npub,
                 "invitee_pubkey": member_pubkey.to_hex(),
-                "keypackage_event_id": newest.id.to_hex(),
+                "keypackages": {
+                    "total_found": events.len(),
+                    "deleted_count": deleted_ids.len(),
+                    "available_count": available_kps.len(),
+                    "all_keypackages": keypackages,
+                    "selected_keypackage_id": newest.id.to_hex(),
+                },
+                "deletions": deletions,
                 "welcome_event_id": welcome_event_id,
                 "group_id": group_id_hex,
                 "group_name": group_name,

@@ -668,6 +668,28 @@
         </div>
     </div>
 
+    <!-- Invite Member Details Modal -->
+    <div id="invite-details-modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000; overflow-y: auto;">
+        <div style="background: white; max-width: 800px; margin: 30px auto; padding: 30px; border-radius: 8px; margin-bottom: 30px;">
+            <div style="text-align: center;">
+                <div style="font-size: 48px; margin-bottom: 20px;">👋</div>
+                <h2 style="margin-bottom: 15px;">Inviting Member to Group</h2>
+            </div>
+
+            <div id="invite-status-message" style="text-align: center; color: #666; margin-bottom: 25px;">
+                Processing invitation...
+            </div>
+
+            <div id="invite-details-content" style="margin-bottom: 20px;">
+                <!-- Details will be populated here -->
+            </div>
+
+            <div id="invite-close-button-container" style="display: none; text-align: center; margin-top: 20px;">
+                <button onclick="closeInviteDetailsModal()" style="padding: 12px 30px; background: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;">Close</button>
+            </div>
+        </div>
+    </div>
+
     <style>
         @keyframes spin {
             0% { transform: rotate(0deg); }
@@ -812,6 +834,7 @@
             import_nsec,
             get_pubkey_hex,
             clear_keys,
+            clear_storage_cache,
             init_wallet,
             get_balance,
             receive_token,
@@ -826,6 +849,8 @@
             debug_fetch_welcome_events,
             process_welcome_event,
             create_group_with_members,
+            fetch_keypackages_for_npub,
+            fetch_deletions_for_npub,
             invite_member_to_group,
             send_message_to_group,
             get_messages_for_group,
@@ -1923,6 +1948,9 @@
 
         window.confirmResetIdentity = async function() {
             try {
+                // Clear in-memory storage cache
+                await clear_storage_cache();
+
                 // Clear everything except wallet
                 clearAllExceptWallet();
 
@@ -1962,6 +1990,9 @@
             }
 
             try {
+                // Clear in-memory storage cache
+                await clear_storage_cache();
+
                 // Clear all data except wallet
                 clearAllExceptWallet();
 
@@ -2740,6 +2771,11 @@
             currentGroupIdForInvite = null;
         };
 
+        // Close invite details modal
+        window.closeInviteDetailsModal = function() {
+            document.getElementById('invite-details-modal').style.display = 'none';
+        };
+
         window.inviteMember = async function() {
             const npub = document.getElementById('invite-member-npub').value.trim();
 
@@ -2758,19 +2794,214 @@
                 return;
             }
 
+            // Show detailed modal
+            const modal = document.getElementById('invite-details-modal');
+            const statusMessage = document.getElementById('invite-status-message');
+            const detailsContent = document.getElementById('invite-details-content');
+            const closeButtonContainer = document.getElementById('invite-close-button-container');
+
+            modal.style.display = 'block';
+            statusMessage.textContent = 'Step 1: Fetching KeyPackages...';
+            detailsContent.innerHTML = '<div style="text-align: center;"><div style="margin: 30px auto; width: 40px; height: 40px; border: 4px solid #f3f3f3; border-top: 4px solid #0066cc; border-radius: 50%; animation: spin 1s linear infinite;"></div></div>';
+            closeButtonContainer.style.display = 'none';
+
             const statusDiv = document.getElementById('invite-member-status');
             statusDiv.textContent = 'Sending invite...';
 
             try {
-                // Call WASM function
+                // Step 1: Fetch KeyPackages
+                const kpResultJson = await fetch_keypackages_for_npub(npub);
+                const kpResult = JSON.parse(kpResultJson);
+
+                // Update modal with KeyPackages
+                let html = '<div style="background: #f8f9fa; border-radius: 8px; padding: 20px; margin-bottom: 20px;">';
+                html += '<h3 style="margin-top: 0; color: #0066cc;">📦 KeyPackages Found</h3>';
+                html += `<p style="margin: 10px 0;"><strong>Total found:</strong> ${kpResult.total_found}</p>`;
+
+                if (kpResult.keypackages && kpResult.keypackages.length > 0) {
+                    html += '<div style="margin-top: 15px;"><strong>All KeyPackages:</strong></div>';
+                    html += '<div style="max-height: 200px; overflow-y: auto; margin-top: 10px;">';
+                    kpResult.keypackages.forEach(kp => {
+                        const date = new Date(kp.created_at * 1000).toLocaleString();
+                        html += `
+                            <div style="padding: 8px; border-bottom: 1px solid #ddd; font-size: 0.9em;">
+                                <div style="font-family: monospace; color: #666;">${kp.event_id.substring(0, 16)}...</div>
+                                <div style="font-size: 0.85em; color: #666;">${date}</div>
+                            </div>
+                        `;
+                    });
+                    html += '</div>';
+                }
+                html += '</div>';
+                detailsContent.innerHTML = html;
+                statusMessage.textContent = 'Step 2: Fetching deletion events (Kind 5)...';
+
+                // Step 2: Fetch deletions
+                const delResultJson = await fetch_deletions_for_npub(npub);
+                const delResult = JSON.parse(delResultJson);
+
+                // Update modal with deletions
+                if (delResult.deletions && delResult.deletions.length > 0) {
+                    html += '<div style="background: #fff3cd; border-radius: 8px; padding: 20px; margin-bottom: 20px;">';
+                    html += '<h3 style="margin-top: 0; color: #856404;">🗑️ Deletion Events (Kind 5)</h3>';
+                    html += `<p style="margin: 10px 0;"><strong>Total found:</strong> ${delResult.total_found}</p>`;
+                    html += '<div style="max-height: 200px; overflow-y: auto; margin-top: 10px;">';
+                    delResult.deletions.forEach(del => {
+                        const date = new Date(del.created_at * 1000).toLocaleString();
+                        html += `
+                            <div style="padding: 8px; border-bottom: 1px solid #e0e0e0; font-size: 0.9em;">
+                                <div style="font-size: 0.85em; color: #666; margin-bottom: 4px;">${date}</div>
+                                ${del.references && del.references.length > 0 ?
+                                    `<div style="font-size: 0.9em; color: #856404;">Deletes KP: ${del.references.map(r => r.substring(0, 16) + '...').join(', ')}</div>`
+                                    : ''}
+                            </div>
+                        `;
+                    });
+                    html += '</div>';
+                    html += '</div>';
+                }
+                detailsContent.innerHTML = html;
+
+                // Calculate which KPs are deleted
+                const deletedIds = new Set();
+                if (delResult.deletions) {
+                    delResult.deletions.forEach(del => {
+                        if (del.references) {
+                            del.references.forEach(ref => deletedIds.add(ref));
+                        }
+                    });
+                }
+
+                // Update KeyPackages section with deleted status
+                const availableCount = kpResult.keypackages.filter(kp => !deletedIds.has(kp.event_id)).length;
+                html = '<div style="background: #f8f9fa; border-radius: 8px; padding: 20px; margin-bottom: 20px;">';
+                html += '<h3 style="margin-top: 0; color: #0066cc;">📦 KeyPackages Found</h3>';
+                html += `<p style="margin: 10px 0;"><strong>Total found:</strong> ${kpResult.total_found}</p>`;
+                html += `<p style="margin: 10px 0;"><strong>Deleted:</strong> ${deletedIds.size}</p>`;
+                html += `<p style="margin: 10px 0;"><strong>Available:</strong> ${availableCount}</p>`;
+
+                if (kpResult.keypackages && kpResult.keypackages.length > 0) {
+                    html += '<div style="margin-top: 15px;"><strong>All KeyPackages:</strong></div>';
+                    html += '<div style="max-height: 200px; overflow-y: auto; margin-top: 10px;">';
+                    kpResult.keypackages.forEach(kp => {
+                        const isDeleted = deletedIds.has(kp.event_id);
+                        const icon = isDeleted ? '❌' : '📦';
+                        const color = isDeleted ? '#dc3545' : '#666';
+                        const date = new Date(kp.created_at * 1000).toLocaleString();
+                        html += `
+                            <div style="padding: 8px; border-bottom: 1px solid #ddd; font-size: 0.9em;">
+                                <div style="display: flex; align-items: center;">
+                                    <span style="font-size: 16px; margin-right: 8px;">${icon}</span>
+                                    <div style="flex: 1;">
+                                        <div style="font-family: monospace; color: ${color};">${kp.event_id.substring(0, 16)}...</div>
+                                        <div style="font-size: 0.85em; color: #666;">${date}</div>
+                                    </div>
+                                </div>
+                            </div>
+                        `;
+                    });
+                    html += '</div>';
+                }
+                html += '</div>';
+
+                // Re-add deletions section
+                if (delResult.deletions && delResult.deletions.length > 0) {
+                    html += '<div style="background: #fff3cd; border-radius: 8px; padding: 20px; margin-bottom: 20px;">';
+                    html += '<h3 style="margin-top: 0; color: #856404;">🗑️ Deletion Events (Kind 5)</h3>';
+                    html += `<p style="margin: 10px 0;"><strong>Total found:</strong> ${delResult.total_found}</p>`;
+                    html += '<div style="max-height: 200px; overflow-y: auto; margin-top: 10px;">';
+                    delResult.deletions.forEach(del => {
+                        const date = new Date(del.created_at * 1000).toLocaleString();
+                        html += `
+                            <div style="padding: 8px; border-bottom: 1px solid #e0e0e0; font-size: 0.9em;">
+                                <div style="font-size: 0.85em; color: #666; margin-bottom: 4px;">${date}</div>
+                                ${del.references && del.references.length > 0 ?
+                                    `<div style="font-size: 0.9em; color: #856404;">Deletes KP: ${del.references.map(r => r.substring(0, 16) + '...').join(', ')}</div>`
+                                    : ''}
+                            </div>
+                        `;
+                    });
+                    html += '</div>';
+                    html += '</div>';
+                }
+                detailsContent.innerHTML = html;
+                statusMessage.textContent = 'Step 3: Sending invitation to group...';
+
+                // Step 3: Actually send the invitation
                 const resultJson = await invite_member_to_group(currentGroupIdForInvite, npub);
                 const result = JSON.parse(resultJson);
+
+                // Update KeyPackages section to show selected one
+                html = '<div style="background: #f8f9fa; border-radius: 8px; padding: 20px; margin-bottom: 20px;">';
+                html += '<h3 style="margin-top: 0; color: #0066cc;">📦 KeyPackages Found</h3>';
+                html += `<p style="margin: 10px 0;"><strong>Total found:</strong> ${result.keypackages.total_found}</p>`;
+                html += `<p style="margin: 10px 0;"><strong>Deleted:</strong> ${result.keypackages.deleted_count}</p>`;
+                html += `<p style="margin: 10px 0;"><strong>Available:</strong> ${result.keypackages.available_count}</p>`;
+
+                if (result.keypackages.all_keypackages && result.keypackages.all_keypackages.length > 0) {
+                    html += '<div style="margin-top: 15px;"><strong>All KeyPackages:</strong></div>';
+                    html += '<div style="max-height: 200px; overflow-y: auto; margin-top: 10px;">';
+                    result.keypackages.all_keypackages.forEach(kp => {
+                        const isSelected = kp.event_id === result.keypackages.selected_keypackage_id;
+                        const icon = kp.deleted ? '❌' : (isSelected ? '✅' : '📦');
+                        const color = kp.deleted ? '#dc3545' : (isSelected ? '#28a745' : '#666');
+                        const label = isSelected ? ' (SELECTED)' : '';
+                        const date = new Date(kp.created_at * 1000).toLocaleString();
+
+                        html += `
+                            <div style="padding: 8px; border-bottom: 1px solid #ddd; font-size: 0.9em;">
+                                <div style="display: flex; align-items: center;">
+                                    <span style="font-size: 16px; margin-right: 8px;">${icon}</span>
+                                    <div style="flex: 1;">
+                                        <div style="font-family: monospace; color: ${color};">${kp.event_id.substring(0, 16)}...${label}</div>
+                                        <div style="font-size: 0.85em; color: #666;">${date}</div>
+                                    </div>
+                                </div>
+                            </div>
+                        `;
+                    });
+                    html += '</div>';
+                }
+                html += '</div>';
+
+                // Re-add deletions section (already present)
+                if (result.deletions && result.deletions.length > 0) {
+                    html += '<div style="background: #fff3cd; border-radius: 8px; padding: 20px; margin-bottom: 20px;">';
+                    html += '<h3 style="margin-top: 0; color: #856404;">🗑️ Deletion Events (Kind 5)</h3>';
+                    html += `<p style="margin: 10px 0;"><strong>Total found:</strong> ${result.deletions.length}</p>`;
+                    html += '<div style="max-height: 200px; overflow-y: auto; margin-top: 10px;">';
+                    result.deletions.forEach(del => {
+                        const date = new Date(del.created_at * 1000).toLocaleString();
+                        html += `
+                            <div style="padding: 8px; border-bottom: 1px solid #e0e0e0; font-size: 0.9em;">
+                                <div style="font-size: 0.85em; color: #666; margin-bottom: 4px;">${date}</div>
+                                ${del.references && del.references.length > 0 ?
+                                    `<div style="font-size: 0.9em; color: #856404;">Deletes KP: ${del.references.map(r => r.substring(0, 16) + '...').join(', ')}</div>`
+                                    : ''}
+                            </div>
+                        `;
+                    });
+                    html += '</div>';
+                    html += '</div>';
+                }
+
+                // Success section
+                html += '<div style="background: #d4edda; border-radius: 8px; padding: 20px;">';
+                html += '<h3 style="margin-top: 0; color: #155724;">✅ Invitation Sent</h3>';
+                html += `<p style="margin: 10px 0;"><strong>Invitee:</strong> ${result.invitee_npub.substring(0, 20)}...</p>`;
+                html += `<p style="margin: 10px 0;"><strong>Group:</strong> ${result.group_name}</p>`;
+                html += `<p style="margin: 10px 0;"><strong>Selected KeyPackage ID:</strong> <span style="font-family: monospace; font-size: 0.85em;">${result.keypackages.selected_keypackage_id.substring(0, 16)}...</span></p>`;
+                html += '</div>';
+
+                detailsContent.innerHTML = html;
+                statusMessage.innerHTML = '<strong style="color: #28a745;">✅ Invitation completed successfully!</strong>';
+                closeButtonContainer.style.display = 'block';
 
                 // Save the invitation record
                 saveSentInvitation({
                     invitee_npub: result.invitee_npub,
                     invitee_pubkey: result.invitee_pubkey,
-                    keypackage_event_id: result.keypackage_event_id,
+                    keypackage_event_id: result.keypackages.selected_keypackage_id,
                     welcome_event_id: result.welcome_event_id,
                     group_id: result.group_id,
                     group_name: result.group_name,
@@ -2784,12 +3015,19 @@
                     await refreshSentInvitations();
                 }
 
-                // Wait a moment then close
-                setTimeout(() => {
-                    closeInviteModal();
-                }, 1500);
+                // Close the invite input modal
+                closeInviteModal();
             } catch (err) {
                 console.error('Failed to invite member:', err);
+
+                // Show error in details modal
+                const detailsContent = document.getElementById('invite-details-content');
+                const statusMessage = document.getElementById('invite-status-message');
+                const closeButtonContainer = document.getElementById('invite-close-button-container');
+
+                statusMessage.innerHTML = '<strong style="color: #dc3545;">❌ Failed to send invitation</strong>';
+                detailsContent.innerHTML = `<div style="padding: 20px; background: #f8d7da; border: 1px solid #f5c6cb; border-radius: 4px; color: #721c24;">${err}</div>`;
+                closeButtonContainer.style.display = 'block';
                 statusDiv.innerHTML = `<div class="error">Failed: ${err}</div>`;
             }
         };
