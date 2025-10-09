@@ -139,12 +139,11 @@ impl MdkState {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct MdkHybridStorage {
-    state: Arc<Mutex<MdkState>>,
-    // IMPORTANT: Wrap MemoryStorage in Arc so clones share the same OpenMLS storage
-    // This ensures KeyPackage private keys are accessible across all clones
-    openmls_storage: Arc<MemoryStorage>,
+    state: Mutex<MdkState>,
+    // Use Mutex for interior mutability - the entire struct will be wrapped in Arc
+    openmls_storage: Mutex<MemoryStorage>,
 }
 
 impl MdkHybridStorage {
@@ -230,8 +229,9 @@ impl MdkHybridStorage {
 
     /// Save OpenMLS MemoryStorage to localStorage
     fn save_openmls_storage(&self) -> Result<(), JsValue> {
-        // Get the values from MemoryStorage (dereference Arc)
-        let values = self.openmls_storage.as_ref().values.read().unwrap();
+        // Get the values from MemoryStorage
+        let storage = self.openmls_storage.lock().unwrap();
+        let values = storage.values.read().unwrap();
 
         log(&format!("Saving OpenMLS storage with {} entries", values.len()));
 
@@ -276,8 +276,8 @@ impl MdkHybridStorage {
         let openmls_storage = Self::load_openmls_storage()?;
 
         let storage = Self {
-            state: Arc::new(Mutex::new(state)),
-            openmls_storage: Arc::new(openmls_storage),
+            state: Mutex::new(state),
+            openmls_storage: Mutex::new(openmls_storage),
         };
 
         // Save immediately to ensure storage is initialized
@@ -505,7 +505,7 @@ impl WelcomeStorage for MdkHybridStorage {
     }
 }
 
-// Implement MdkStorageProvider trait
+// Implement MdkStorageProvider trait for MdkHybridStorage
 impl MdkStorageProvider for MdkHybridStorage {
     type OpenMlsStorageProvider = MemoryStorage;
 
@@ -514,13 +514,140 @@ impl MdkStorageProvider for MdkHybridStorage {
     }
 
     fn openmls_storage(&self) -> &Self::OpenMlsStorageProvider {
-        self.openmls_storage.as_ref()
+        // This is unsafe but required by the trait
+        // Safety: We ensure single-threaded access in WASM environment
+        // We can't use data_ptr() as it's unstable, so we use get() and extend lifetime
+        unsafe {
+            let guard = self.openmls_storage.lock().unwrap();
+            let ptr = &*guard as *const MemoryStorage;
+            &*ptr
+        }
     }
 
     fn openmls_storage_mut(&mut self) -> &mut Self::OpenMlsStorageProvider {
-        // This is tricky - we need mutable access but Arc doesn't allow that
-        // We'll need to use Arc::get_mut or panic if there are multiple references
-        Arc::get_mut(&mut self.openmls_storage)
-            .expect("Cannot get mutable reference to openmls_storage - multiple references exist")
+        // Get mutable reference through the Mutex
+        // Safety: We ensure single-threaded access in WASM environment
+        self.openmls_storage.get_mut().unwrap()
+    }
+}
+
+// Newtype wrapper for Arc<MdkHybridStorage> to implement traits
+#[derive(Clone, Debug)]
+pub struct SharedMdkStorage(Arc<MdkHybridStorage>);
+
+impl SharedMdkStorage {
+    pub fn new(storage: Arc<MdkHybridStorage>) -> Self {
+        Self(storage)
+    }
+
+    pub fn inner(&self) -> &Arc<MdkHybridStorage> {
+        &self.0
+    }
+}
+
+// Implement GroupStorage trait for SharedMdkStorage by delegating to inner
+impl GroupStorage for SharedMdkStorage {
+    fn all_groups(&self) -> Result<Vec<Group>, GroupError> {
+        self.0.all_groups()
+    }
+
+    fn find_group_by_mls_group_id(&self, group_id: &GroupId) -> Result<Option<Group>, GroupError> {
+        self.0.find_group_by_mls_group_id(group_id)
+    }
+
+    fn find_group_by_nostr_group_id(&self, nostr_group_id: &[u8; 32]) -> Result<Option<Group>, GroupError> {
+        self.0.find_group_by_nostr_group_id(nostr_group_id)
+    }
+
+    fn save_group(&self, group: Group) -> Result<(), GroupError> {
+        self.0.save_group(group)
+    }
+
+    fn messages(&self, group_id: &GroupId) -> Result<Vec<Message>, GroupError> {
+        self.0.messages(group_id)
+    }
+
+    fn admins(&self, group_id: &GroupId) -> Result<BTreeSet<PublicKey>, GroupError> {
+        self.0.admins(group_id)
+    }
+
+    fn group_relays(&self, group_id: &GroupId) -> Result<BTreeSet<GroupRelay>, GroupError> {
+        self.0.group_relays(group_id)
+    }
+
+    fn replace_group_relays(&self, group_id: &GroupId, relays: BTreeSet<RelayUrl>) -> Result<(), GroupError> {
+        self.0.replace_group_relays(group_id, relays)
+    }
+
+    fn get_group_exporter_secret(&self, group_id: &GroupId, epoch: u64) -> Result<Option<GroupExporterSecret>, GroupError> {
+        self.0.get_group_exporter_secret(group_id, epoch)
+    }
+
+    fn save_group_exporter_secret(&self, secret: GroupExporterSecret) -> Result<(), GroupError> {
+        self.0.save_group_exporter_secret(secret)
+    }
+}
+
+// Implement MessageStorage trait for SharedMdkStorage by delegating to inner
+impl MessageStorage for SharedMdkStorage {
+    fn save_message(&self, message: Message) -> Result<(), MessageError> {
+        self.0.save_message(message)
+    }
+
+    fn find_message_by_event_id(&self, event_id: &EventId) -> Result<Option<Message>, MessageError> {
+        self.0.find_message_by_event_id(event_id)
+    }
+
+    fn save_processed_message(&self, processed: ProcessedMessage) -> Result<(), MessageError> {
+        self.0.save_processed_message(processed)
+    }
+
+    fn find_processed_message_by_event_id(&self, event_id: &EventId) -> Result<Option<ProcessedMessage>, MessageError> {
+        self.0.find_processed_message_by_event_id(event_id)
+    }
+}
+
+// Implement WelcomeStorage trait for SharedMdkStorage by delegating to inner
+impl WelcomeStorage for SharedMdkStorage {
+    fn save_welcome(&self, welcome: Welcome) -> Result<(), WelcomeError> {
+        self.0.save_welcome(welcome)
+    }
+
+    fn find_welcome_by_event_id(&self, event_id: &EventId) -> Result<Option<Welcome>, WelcomeError> {
+        self.0.find_welcome_by_event_id(event_id)
+    }
+
+    fn pending_welcomes(&self) -> Result<Vec<Welcome>, WelcomeError> {
+        self.0.pending_welcomes()
+    }
+
+    fn save_processed_welcome(&self, processed: ProcessedWelcome) -> Result<(), WelcomeError> {
+        self.0.save_processed_welcome(processed)
+    }
+
+    fn find_processed_welcome_by_event_id(&self, event_id: &EventId) -> Result<Option<ProcessedWelcome>, WelcomeError> {
+        self.0.find_processed_welcome_by_event_id(event_id)
+    }
+}
+
+// Implement MdkStorageProvider trait for SharedMdkStorage
+impl MdkStorageProvider for SharedMdkStorage {
+    type OpenMlsStorageProvider = MemoryStorage;
+
+    fn backend(&self) -> Backend {
+        self.0.backend()
+    }
+
+    fn openmls_storage(&self) -> &Self::OpenMlsStorageProvider {
+        self.0.openmls_storage()
+    }
+
+    fn openmls_storage_mut(&mut self) -> &mut Self::OpenMlsStorageProvider {
+        // This is tricky - we need to get mutable access through Arc
+        // Safety: In WASM we're single-threaded, so this is safe
+        unsafe {
+            let ptr = Arc::as_ptr(&self.0) as *mut MdkHybridStorage;
+            (*ptr).openmls_storage_mut()
+        }
     }
 }

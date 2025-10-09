@@ -14,7 +14,7 @@ mod wallet_db;
 use wallet_db::HybridWalletDatabase;
 
 mod mdk_storage;
-use mdk_storage::MdkHybridStorage;
+use mdk_storage::{MdkHybridStorage, SharedMdkStorage};
 
 use cdk::wallet::{Wallet, WalletBuilder, ReceiveOptions};
 use cdk::nuts::{CurrencyUnit, Token};
@@ -23,29 +23,29 @@ use cdk::mint_url::MintUrl;
 use mdk_core::MDK;
 use mdk_storage_traits::GroupId;
 
-/// Global storage cache - loaded once per browser session
-static STORAGE_CACHE: Lazy<TokioMutex<Option<MdkHybridStorage>>> =
+/// Global storage cache - Arc-wrapped singleton loaded once per browser session
+static STORAGE_CACHE: Lazy<TokioMutex<Option<Arc<MdkHybridStorage>>>> =
     Lazy::new(|| TokioMutex::new(None));
 
-/// Get or create cached storage instance
-async fn get_or_create_storage() -> Result<MdkHybridStorage, JsValue> {
+/// Get or create cached storage instance (Arc-wrapped for sharing)
+async fn get_or_create_storage() -> Result<SharedMdkStorage, JsValue> {
     let mut cache = STORAGE_CACHE.lock().await;
 
     if let Some(storage) = cache.as_ref() {
-        // Return a clone of the cached storage (cheap - uses Arc internally)
-        return Ok(storage.clone());
+        // Return a clone of the Arc (cheap - just increments refcount)
+        return Ok(SharedMdkStorage::new(Arc::clone(storage)));
     }
 
-    // First access this session - load from localStorage
+    // First access this session - load from localStorage and wrap in Arc
     log("📦 Loading storage from localStorage (first access this session)");
-    let storage = MdkHybridStorage::new().await?;
-    *cache = Some(storage.clone());
+    let storage = Arc::new(MdkHybridStorage::new().await?);
+    *cache = Some(Arc::clone(&storage));
     log("✅ Storage cached for session");
-    Ok(storage)
+    Ok(SharedMdkStorage::new(storage))
 }
 
 /// Helper function to create MDK instance
-async fn create_mdk() -> Result<MDK<MdkHybridStorage>, JsValue> {
+async fn create_mdk() -> Result<MDK<SharedMdkStorage>, JsValue> {
     let storage = get_or_create_storage().await?;
     Ok(MDK::new(storage))
 }
@@ -1178,7 +1178,7 @@ pub fn create_and_publish_keypackage() -> js_sys::Promise {
 
             // Explicitly save the storage to persist the KeyPackage private key
             // This must be done BEFORE publishing, so the private key is available for later Welcome processing
-            storage.save_snapshot()
+            storage.inner().save_snapshot()
                 .map_err(|e| JsValue::from_str(&format!("Failed to save MDK storage: {:?}", e)))?;
             log("✓ KeyPackage private key saved to storage");
 
