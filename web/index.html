@@ -60,6 +60,28 @@
             border-left: 3px solid #0066cc;
             padding-left: 17px;
         }
+        .wallet-balance {
+            font-size: 0.85em;
+            color: #666;
+            margin-top: 4px;
+            font-weight: bold;
+        }
+        @keyframes balanceIncrease {
+            0% { color: #28a745; transform: scale(1); }
+            50% { color: #28a745; transform: scale(1.15); }
+            100% { color: #666; transform: scale(1); }
+        }
+        @keyframes balanceDecrease {
+            0% { color: #dc3545; transform: scale(1); }
+            50% { color: #dc3545; transform: scale(1.15); }
+            100% { color: #666; transform: scale(1); }
+        }
+        .balance-increase {
+            animation: balanceIncrease 0.6s ease-out;
+        }
+        .balance-decrease {
+            animation: balanceDecrease 0.6s ease-out;
+        }
         #content {
             flex: 1;
             padding: 20px;
@@ -247,7 +269,10 @@
         <div id="sidebar">
             <div class="nav-item active" onclick="showSection('identity', event)">🔐 Nostr Identity</div>
             <div class="nav-item" onclick="showSection('relays', event)">⚙️ Relays</div>
-            <div class="nav-item" onclick="showSection('wallet', event)">💰 Wallet</div>
+            <div class="nav-item" onclick="showSection('wallet', event)">
+                💰 Wallet
+                <div id="sidebar-balance" class="wallet-balance">...</div>
+            </div>
             <div class="nav-item" onclick="showSection('keypackages', event)">🔑 Key Packages</div>
             <div class="nav-item" onclick="showSection('groups', event)">📱 Groups</div>
         </div>
@@ -841,6 +866,32 @@
             }
         }
 
+        // Track previous balance for animation
+        let previousTotalBalance = null;
+
+        // Update sidebar balance with animation
+        function updateSidebarBalance(totalBalance) {
+            const balanceEl = document.getElementById('sidebar-balance');
+            if (!balanceEl) return;
+
+            // Remove any existing animation classes
+            balanceEl.classList.remove('balance-increase', 'balance-decrease');
+
+            // Update text
+            balanceEl.textContent = `${totalBalance} sats`;
+
+            // Animate if balance changed
+            if (previousTotalBalance !== null && previousTotalBalance !== totalBalance) {
+                if (totalBalance > previousTotalBalance) {
+                    balanceEl.classList.add('balance-increase');
+                } else {
+                    balanceEl.classList.add('balance-decrease');
+                }
+            }
+
+            previousTotalBalance = totalBalance;
+        }
+
         // Refresh per-mint balances display
         async function refreshMintBalances() {
             try {
@@ -849,6 +900,10 @@
                 const currentMint = await get_current_mint();
 
                 const listDiv = document.getElementById('mint-balances-list');
+
+                // Calculate total balance
+                const totalBalance = balances.reduce((sum, b) => sum + b.balance, 0);
+                updateSidebarBalance(totalBalance);
 
                 if (balances.length === 0) {
                     listDiv.innerHTML = '<p style="color: #666; font-style: italic;">No balances yet</p>';
