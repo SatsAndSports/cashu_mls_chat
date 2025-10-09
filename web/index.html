@@ -323,12 +323,11 @@
                         <p style="margin: 8px 0 0 0; font-size: 0.9em;">Create a KeyPackage to allow others to invite you to groups.</p>
                     </div>
 
-                    <div id="keypackage-list"></div>
-
-                    <div style="display: flex; gap: 10px; margin-top: 15px;">
+                    <div style="display: flex; gap: 10px; margin-bottom: 15px;">
                         <button onclick="createKeyPackage()">+ Create KeyPackage</button>
-                        <button onclick="checkForInvites()" style="background: #28a745;">📬 Check for Invites</button>
                     </div>
+
+                    <div id="keypackage-list"></div>
                 </div>
             </div>
 
@@ -371,9 +370,10 @@
                     <button onclick="showSection('identity'); createKeyPackage();" style="margin-left: 10px; padding: 5px 15px; background: #0066cc; color: white; border: none; border-radius: 4px; cursor: pointer;">Create One</button>
                 </div>
 
+                <button onclick="showCreateGroupModal()" style="margin-bottom: 15px;">➕ Create New Group</button>
+
                 <div id="groups-status">Loading groups...</div>
                 <div id="groups-list"></div>
-                <button onclick="showCreateGroupModal()">➕ Create New Group</button>
 
             </div>
 
@@ -1006,7 +1006,9 @@
                 // Initialize KeyPackages
                 document.getElementById('keypackages-container').style.display = 'block';
                 await refreshKeyPackageList();
-                // await initializeWelcomeSubscription();
+
+                // Start auto-subscription to Welcome messages
+                await initializeWelcomeSubscription();
 
                 document.getElementById('buttons').style.display = 'block';
                 document.getElementById('status').innerHTML = '<div class="success">✓ Ready</div>';
@@ -2327,8 +2329,37 @@
                     const result = JSON.parse(resultJson);
                     console.log("📨 Received Welcome:", result);
 
-                    // Mark KeyPackage as consumed
+                    // Check if this is an error result
+                    if (result.error) {
+                        console.error(`❌ Failed to process Welcome: ${result.error}`);
+
+                        // Delete the KeyPackage regardless of error
+                        try {
+                            await delete_keypackage(result.kp_event_id);
+                            console.log(`✅ Deleted KeyPackage: ${result.kp_event_id.substring(0, 16)}...`);
+                        } catch (deleteErr) {
+                            console.error(`⚠️ Failed to delete KeyPackage: ${deleteErr}`);
+                        }
+
+                        // If already processed, mark as consumed
+                        if (result.error.includes("already processed") || result.error.includes("missing welcome")) {
+                            markKeyPackageConsumed(result.kp_event_id, "unknown_already_joined");
+                        }
+
+                        await refreshKeyPackageList();
+                        return;
+                    }
+
+                    // Success case: mark as consumed and update UI
                     markKeyPackageConsumed(result.kp_event_id, result.group_id);
+
+                    // Delete the KeyPackage from Nostr (publish Kind 5)
+                    try {
+                        await delete_keypackage(result.kp_event_id);
+                        console.log(`✅ Deleted KeyPackage: ${result.kp_event_id.substring(0, 16)}...`);
+                    } catch (deleteErr) {
+                        console.error(`⚠️ Failed to delete KeyPackage: ${deleteErr}`);
+                    }
 
                     // Refresh groups list
                     await refreshGroups();
@@ -2337,7 +2368,7 @@
                     await refreshKeyPackageList();
 
                     // Show notification
-                    showToast(`📨 Joined group: ${result.group_name}`);
+                    showToast(`🎉 Joined group: ${result.group_name}`);
                 });
 
                 console.log("✓ Welcome subscription active");

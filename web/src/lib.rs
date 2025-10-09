@@ -1413,34 +1413,24 @@ pub fn process_welcome_event(welcome_event_id: String, kp_event_id: String) -> j
 pub fn subscribe_to_welcome_messages(callback: js_sys::Function) -> js_sys::Promise {
     future_to_promise(async move {
         let result = async {
-            log("📡 Subscribing to Welcome messages (Kind 444)...");
+            log("📡 Subscribing to Welcome messages (Kind 444) addressed to us...");
 
             // Get our keys to filter Welcomes addressed to us
             let keys = get_keys()?;
             let pubkey = keys.public_key();
 
-            // Get our KeyPackage event IDs (so we can filter Welcomes)
             let client = create_connected_client().await?;
 
-            let kp_filter = nostr::Filter::new()
-                .kind(Kind::Custom(443))
-                .author(pubkey);
-
-            let kp_events = client.fetch_events(kp_filter, Duration::from_secs(5)).await
-                .map_err(|e| JsValue::from_str(&format!("Failed to fetch KeyPackages: {}", e)))?;
-
-            let kp_event_ids: Vec<String> = kp_events.iter().map(|e| e.id.to_hex()).collect();
-            log(&format!("Found {} KeyPackage(s) to monitor", kp_event_ids.len()));
-
-            // Subscribe to Welcomes (Kind 444)
+            // Subscribe to Welcomes (Kind 444) with #p tag filtering (addressed to us)
             let filter = nostr::Filter::new()
                 .kind(Kind::Custom(444))
+                .pubkey(pubkey) // Filter by #p tag (addressed to us)
                 .since(nostr::Timestamp::now()); // Only new Welcomes from now
 
             client.subscribe(filter, None).await
                 .map_err(|e| JsValue::from_str(&format!("Failed to subscribe: {}", e)))?;
 
-            log("✓ Subscribed to Welcome messages");
+            log(&format!("✓ Subscribed to Welcome messages for pubkey: {}", pubkey.to_hex()[..16].to_string()));
 
             // Spawn background task to listen for notifications
             wasm_bindgen_futures::spawn_local(async move {
@@ -1451,19 +1441,24 @@ pub fn subscribe_to_welcome_messages(callback: js_sys::Function) -> js_sys::Prom
                     if let RelayPoolNotification::Event { relay_url, event: welcome_event, .. } = notification {
                         log(&format!("📩 Received Welcome event: {} from {}", welcome_event.id.to_hex(), relay_url));
 
-                        // Check if this Welcome references one of our KeyPackages
+                        // Extract KeyPackage reference from #e tags
                         let kp_ref: Option<String> = welcome_event.tags.iter()
-                            .find(|tag| tag.kind().as_str() == "e" &&
-                                tag.content().map(|c| kp_event_ids.iter().any(|kp| kp == c)).unwrap_or(false))
-                            .and_then(|tag| tag.content().map(|s| s.to_string()));
+                            .find_map(|tag| {
+                                let tag_vec = tag.clone().to_vec();
+                                if tag_vec.get(0).map(|s| s.as_str()) == Some("e") {
+                                    tag_vec.get(1).cloned()
+                                } else {
+                                    None
+                                }
+                            });
 
                         if kp_ref.is_none() {
-                            log("  Not for our KeyPackages, ignoring");
+                            log("  No KeyPackage reference found, ignoring");
                             continue;
                         }
 
                         let kp_event_id = kp_ref.unwrap();
-                        log(&format!("  ✅ Welcome references our KeyPackage: {}", &kp_event_id[..16]));
+                        log(&format!("  ✅ Welcome references KeyPackage: {}", &kp_event_id[..16.min(kp_event_id.len())]));
 
                         // Process the Welcome
                         match create_mdk().await {
@@ -1480,32 +1475,88 @@ pub fn subscribe_to_welcome_messages(callback: js_sys::Function) -> js_sys::Prom
                                 rumor.ensure_id();
 
                                 match mdk.process_welcome(&welcome_event.id, &rumor) {
-                                    Ok(group) => {
-                                        let group_id = hex::encode(group.mls_group_id.as_slice());
-                                        let group_name = group.group_name.clone();
-                                        log(&format!("✅ Processed Welcome! Joined group: {}", group_name));
+                                    Ok(welcome) => {
+                                        let group_id = hex::encode(welcome.mls_group_id.as_slice());
+                                        let group_name = welcome.group_name.clone();
+                                        log(&format!("  ✓ Processed Welcome! Group: {}", group_name));
 
-                                        // Call JavaScript callback with result
+                                        // Accept Welcome (join the group)
+                                        log("  Accepting Welcome (joining group)...");
+                                        match mdk.accept_welcome(&welcome) {
+                                            Ok(_) => {
+                                                log(&format!("✅ Successfully joined group: {}", group_name));
+
+                                                // Explicitly save after accepting Welcome
+                                                if let Ok(storage) = get_or_create_storage().await {
+                                                    if let Err(e) = storage.inner().save_snapshot() {
+                                                        log(&format!("⚠️ Failed to save after accept_welcome: {:?}", e));
+                                                    } else {
+                                                        log("  ✓ Storage saved");
+                                                    }
+                                                }
+
+                                                // Call JavaScript callback with result
+                                                #[derive(Serialize)]
+                                                struct WelcomeResult {
+                                                    group_id: String,
+                                                    group_name: String,
+                                                    kp_event_id: String,
+                                                }
+
+                                                let result = WelcomeResult {
+                                                    group_id,
+                                                    group_name,
+                                                    kp_event_id,
+                                                };
+
+                                                if let Ok(json) = serde_json::to_string(&result) {
+                                                    let js_string = JsValue::from_str(&json);
+                                                    let _ = callback.call1(&JsValue::NULL, &js_string);
+                                                }
+                                            }
+                                            Err(e) => {
+                                                let error_str = format!("Failed to accept Welcome: {}", e);
+                                                log(&format!("❌ {}", error_str));
+
+                                                // Notify JS about the error
+                                                #[derive(Serialize)]
+                                                struct ErrorResult {
+                                                    error: String,
+                                                    kp_event_id: String,
+                                                }
+
+                                                let result = ErrorResult {
+                                                    error: error_str,
+                                                    kp_event_id: kp_event_id.clone(),
+                                                };
+
+                                                if let Ok(json) = serde_json::to_string(&result) {
+                                                    let js_string = JsValue::from_str(&json);
+                                                    let _ = callback.call1(&JsValue::NULL, &js_string);
+                                                }
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        let error_str = format!("{}", e);
+                                        log(&format!("❌ Failed to process Welcome: {}", error_str));
+
+                                        // Still notify JS (so it can delete the KeyPackage)
                                         #[derive(Serialize)]
-                                        struct WelcomeResult {
-                                            group_id: String,
-                                            group_name: String,
+                                        struct ErrorResult {
+                                            error: String,
                                             kp_event_id: String,
                                         }
 
-                                        let result = WelcomeResult {
-                                            group_id,
-                                            group_name,
-                                            kp_event_id,
+                                        let result = ErrorResult {
+                                            error: error_str,
+                                            kp_event_id: kp_event_id.clone(),
                                         };
 
                                         if let Ok(json) = serde_json::to_string(&result) {
                                             let js_string = JsValue::from_str(&json);
                                             let _ = callback.call1(&JsValue::NULL, &js_string);
                                         }
-                                    }
-                                    Err(e) => {
-                                        log(&format!("❌ Failed to process Welcome: {}", e));
                                     }
                                 }
                             }
