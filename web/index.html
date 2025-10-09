@@ -1371,7 +1371,7 @@
         // Format message content, detecting and formatting Cashu tokens
         async function formatMessageContent(content) {
             // Detect cashu tokens (start with cashuA or cashuB)
-            const tokenRegex = /cashu[AB][A-Za-z0-9_-]+/g;
+            const tokenRegex = /cashu[AB][A-Za-z0-9_=\-]+/g;
             const tokens = content.match(tokenRegex);
 
             if (!tokens) {
