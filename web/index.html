@@ -1080,13 +1080,15 @@
         window.addMintAndRedeem = async function() {
             if (!pendingTokenRedemption) return;
 
+            // Save the token info before closing modal (which nulls pendingTokenRedemption)
+            const { mint, token } = pendingTokenRedemption;
+
             // Close untrusted mint warning modal and show progress modal
             closeUntrustedMintModal();
             showRedemptionProgress();
             document.getElementById('redemption-status').innerHTML = '🔄 Adding mint and redeeming...';
 
             try {
-                const { mint, token } = pendingTokenRedemption;
 
                 // Add mint to trusted list
                 await add_trusted_mint(mint);
