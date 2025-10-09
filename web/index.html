@@ -308,6 +308,15 @@
                         <div class="npub" id="npub" style="flex: 1;"></div>
                         <button onclick="copyNpub()" style="padding: 8px 12px; background: #f0f0f0; border: 1px solid #ccc; border-radius: 4px; cursor: pointer; font-size: 0.9em;" title="Copy npub">📋</button>
                     </div>
+
+                    <div style="margin-top: 20px;">
+                        <p><strong>Display Name:</strong></p>
+                        <div style="display: flex; align-items: center; gap: 10px;">
+                            <input type="text" id="display-name-input" placeholder="Enter display name" style="flex: 1; padding: 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 1em;" onkeypress="if(event.key === 'Enter') updateDisplayName()">
+                            <button onclick="updateDisplayName()" style="padding: 10px 20px; background: #0066cc; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9em;">Update Display Name</button>
+                        </div>
+                        <div id="display-name-status" style="margin-top: 8px; font-size: 0.9em; color: #666;"></div>
+                    </div>
                 </div>
                 <div id="buttons" style="display: none;">
                     <button onclick="showResetIdentityModal()" style="background: #dc3545;">⚠️ Replace Identity with New Random Keys</button>
@@ -847,6 +856,8 @@
             get_nsec,
             import_nsec,
             get_pubkey_hex,
+            fetch_profile_metadata,
+            publish_profile_metadata,
             clear_keys,
             clear_storage_cache,
             init_wallet,
@@ -1017,6 +1028,9 @@
 
         async function loadWasm() {
             try {
+                // Invalidate profile cache if this is a page refresh
+                invalidateCacheOnRefresh();
+
                 wasm = await init();
                 log("WASM module loaded successfully");
                 await displayNpub();
@@ -1733,7 +1747,7 @@
                     // Format all messages
                     const formattedMessages = await Promise.all(messages.map(async msg => {
                         const timestamp = new Date(msg.created_at * 1000).toLocaleTimeString();
-                        const npub = msg.pubkey.substring(0, 16);
+                        const displayName = await getDisplayName(msg.pubkey);
                         const formattedContent = await formatMessageContent(msg.content);
 
                         // Check if this is the current user's message
@@ -1743,7 +1757,7 @@
                         <div data-message-id="${msg.id}" style="margin-bottom: 10px; display: flex; justify-content: ${isOwnMessage ? 'flex-end' : 'flex-start'};">
                             <div style="max-width: 70%; padding: 8px; background: ${isOwnMessage ? '#dcf8c6' : 'white'}; border-radius: 8px; ${isOwnMessage ? 'border-bottom-right-radius: 2px;' : 'border-bottom-left-radius: 2px;'}">
                                 <div style="font-size: 0.85em; color: #666; margin-bottom: 4px;">
-                                    <strong>${npub}...</strong> • ${timestamp}
+                                    <strong style="cursor: pointer;" onclick="alert('${msg.pubkey}')" title="Click to view npub">${displayName}</strong> • ${timestamp}
                                 </div>
                                 <div>${formattedContent}</div>
                             </div>
@@ -1783,7 +1797,7 @@
             }
 
             const timestamp = new Date(message.created_at * 1000).toLocaleTimeString();
-            const npub = message.pubkey.substring(0, 16);
+            const displayName = await getDisplayName(message.pubkey);
             const formattedContent = await formatMessageContent(message.content);
 
             // Check if this is the current user's message
@@ -1793,7 +1807,7 @@
             <div data-message-id="${message.id}" style="margin-bottom: 10px; display: flex; justify-content: ${isOwnMessage ? 'flex-end' : 'flex-start'};">
                 <div style="max-width: 70%; padding: 8px; background: ${isOwnMessage ? '#dcf8c6' : 'white'}; border-radius: 8px; ${isOwnMessage ? 'border-bottom-right-radius: 2px;' : 'border-bottom-left-radius: 2px;'}">
                     <div style="font-size: 0.85em; color: #666; margin-bottom: 4px;">
-                        <strong>${npub}...</strong> • ${timestamp}
+                        <strong style="cursor: pointer;" onclick="alert('${message.pubkey}')" title="Click to view npub">${displayName}</strong> • ${timestamp}
                     </div>
                     <div>${formattedContent}</div>
                 </div>
@@ -1909,6 +1923,9 @@
                 const npub = get_or_create_keys();
                 document.getElementById('npub').textContent = npub;
                 document.getElementById('npub-container').style.display = 'block';
+
+                // Load current display name
+                await loadCurrentDisplayName();
             } catch (err) {
                 console.error('Failed to get npub:', err);
                 document.getElementById('status').innerHTML =
@@ -2204,6 +2221,161 @@
                 showToast('❌ Failed to copy npub');
             }
         };
+
+        // ========== Profile Metadata Management ==========
+
+        // Invalidate profile cache on page refresh
+        function invalidateCacheOnRefresh() {
+            const navigationEntries = performance.getEntriesByType('navigation');
+            if (navigationEntries.length > 0 && navigationEntries[0].type === 'reload') {
+                console.log('Page was refreshed - invalidating profile metadata cache');
+                const cache = getProfileCache();
+                const now = Math.floor(Date.now() / 1000);
+
+                // Set all cached_at timestamps to 0 to force refresh
+                for (const npub in cache) {
+                    if (cache[npub]) {
+                        cache[npub].cached_at = 0;
+                    }
+                }
+
+                saveProfileCache(cache);
+                console.log('Profile metadata cache invalidated');
+            }
+        }
+
+        // Get profile metadata cache from localStorage
+        function getProfileCache() {
+            const cache = localStorage.getItem('profile_metadata');
+            return cache ? JSON.parse(cache) : {};
+        }
+
+        // Save profile metadata cache to localStorage
+        function saveProfileCache(cache) {
+            localStorage.setItem('profile_metadata', JSON.stringify(cache));
+        }
+
+        // Fetch profile metadata (Kind 0) for a given npub
+        window.fetchProfileMetadata = async function(npub) {
+            try {
+                const cache = getProfileCache();
+                const now = Math.floor(Date.now() / 1000);
+
+                // Check cache first (24 hour expiry)
+                if (cache[npub] && (now - cache[npub].cached_at) < 86400) {
+                    return cache[npub];
+                }
+
+                // Fetch from relays via Rust function
+                const contentJson = await fetch_profile_metadata(npub);
+
+                if (!contentJson) {
+                    console.log(`No profile metadata found for ${npub.substring(0, 16)}...`);
+                    return null;
+                }
+
+                // Parse the metadata JSON
+                const content = JSON.parse(contentJson);
+
+                const metadata = {
+                    cached_at: now,
+                    name: content.name || null,
+                    display_name: content.display_name || null,
+                    picture: content.picture || null,
+                    about: content.about || null,
+                    nip05: content.nip05 || null
+                };
+
+                // Update cache
+                cache[npub] = metadata;
+                saveProfileCache(cache);
+
+                return metadata;
+            } catch (err) {
+                console.error(`Failed to fetch profile metadata for ${npub}:`, err);
+                return null;
+            }
+        };
+
+        // Get display name for npub (from cache or fetch)
+        window.getDisplayName = async function(npub) {
+            const metadata = await fetchProfileMetadata(npub);
+            if (metadata) {
+                return metadata.display_name || metadata.name || npub.substring(0, 16) + '...';
+            }
+            return npub.substring(0, 16) + '...';
+        };
+
+        // Update current user's display name
+        window.updateDisplayName = async function() {
+            const displayName = document.getElementById('display-name-input').value.trim();
+            const statusDiv = document.getElementById('display-name-status');
+
+            if (!displayName) {
+                statusDiv.textContent = '⚠️ Please enter a display name';
+                statusDiv.style.color = '#dc3545';
+                return;
+            }
+
+            try {
+                statusDiv.textContent = 'Publishing...';
+                statusDiv.style.color = '#666';
+
+                // Get current metadata from cache or create new
+                const ourNpub = await get_npub();
+                const currentMetadata = await fetchProfileMetadata(ourNpub);
+
+                // Build metadata object (preserve existing fields)
+                const metadata = {
+                    name: currentMetadata?.name || displayName,
+                    display_name: displayName,
+                    about: currentMetadata?.about || '',
+                    picture: currentMetadata?.picture || '',
+                    nip05: currentMetadata?.nip05 || ''
+                };
+
+                // Publish via Rust function
+                await publish_profile_metadata(JSON.stringify(metadata));
+
+                // Update cache immediately
+                const cache = getProfileCache();
+                cache[ourNpub] = {
+                    cached_at: Math.floor(Date.now() / 1000),
+                    name: metadata.name,
+                    display_name: metadata.display_name,
+                    picture: metadata.picture,
+                    about: metadata.about,
+                    nip05: metadata.nip05
+                };
+                saveProfileCache(cache);
+
+                statusDiv.textContent = '✅ Display name updated!';
+                statusDiv.style.color = '#28a745';
+
+                showToast('✅ Display name updated!');
+            } catch (err) {
+                console.error('Failed to update display name:', err);
+                statusDiv.textContent = '❌ Failed to update: ' + err;
+                statusDiv.style.color = '#dc3545';
+            }
+        };
+
+        // Load current user's display name on page load
+        async function loadCurrentDisplayName() {
+            try {
+                const ourNpub = await get_npub();
+                const metadata = await fetchProfileMetadata(ourNpub);
+
+                if (metadata && metadata.display_name) {
+                    document.getElementById('display-name-input').value = metadata.display_name;
+                    document.getElementById('display-name-status').textContent =
+                        `Current: ${metadata.display_name}`;
+                    document.getElementById('display-name-status').style.color = '#666';
+                }
+            } catch (err) {
+                console.error('Failed to load current display name:', err);
+            }
+        }
 
         function showToast(message) {
             const toast = document.createElement('div');
@@ -2951,10 +3123,16 @@
                     const isAdminMember = group.admin_npubs.includes(memberNpub);
                     const isUs = memberNpub === ourNpub;
 
+                    // Get display name for this member
+                    const displayName = await getDisplayName(memberNpub);
+
                     html += `
                         <div style="display: flex; justify-content: space-between; align-items: center; padding: 12px; border-bottom: 1px solid #eee;">
                             <div style="flex: 1; overflow: hidden;">
-                                <div style="font-family: monospace; font-size: 0.9em; color: #333;">
+                                <div style="font-weight: bold; font-size: 1em; color: #333; margin-bottom: 4px;">
+                                    ${displayName}
+                                </div>
+                                <div style="font-family: monospace; font-size: 0.85em; color: #666;">
                                     ${memberNpub.substring(0, 16)}...${memberNpub.substring(memberNpub.length - 8)}
                                 </div>
                                 <div style="font-size: 0.8em; color: #666; margin-top: 4px;">

@@ -1,6 +1,6 @@
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::future_to_promise;
-use nostr::{Keys, ToBech32, FromBech32, EventBuilder, Kind, RelayUrl, SecretKey};
+use nostr::{Keys, ToBech32, FromBech32, EventBuilder, Kind, RelayUrl, SecretKey, Filter};
 use nostr_sdk::{Client, RelayPoolNotification};
 use web_sys::{window, Storage};
 use std::sync::Arc;
@@ -289,6 +289,75 @@ pub fn import_nsec(nsec: &str) -> Result<(), JsValue> {
 pub fn get_pubkey_hex() -> Result<String, JsValue> {
     let keys = get_keys()?;
     Ok(keys.public_key().to_hex())
+}
+
+/// Fetch profile metadata (Kind 0) for a given npub
+/// Returns JSON string with the metadata or null if not found
+#[wasm_bindgen]
+pub fn fetch_profile_metadata(npub: String) -> js_sys::Promise {
+    future_to_promise(async move {
+        // Decode npub to get hex pubkey
+        let pubkey = nostr::PublicKey::from_bech32(&npub)
+            .map_err(|e| JsValue::from_str(&format!("Invalid npub: {}", e)))?;
+
+        // Create and connect client
+        let client = create_connected_client().await?;
+
+        // Fetch Kind 0 events for this pubkey
+        let filter = Filter::new()
+            .kind(Kind::Metadata)
+            .author(pubkey)
+            .limit(1);
+
+        let events = client.fetch_events(filter, Duration::from_secs(5)).await
+            .map_err(|e| JsValue::from_str(&format!("Failed to fetch events: {}", e)))?;
+
+        // Disconnect
+        let _ = client.disconnect().await;
+
+        if events.is_empty() {
+            return Ok(JsValue::NULL);
+        }
+
+        // Return the most recent event's content (which is already JSON)
+        let event_vec: Vec<_> = events.iter().collect();
+        if let Some(event) = event_vec.first() {
+            Ok(JsValue::from_str(&event.content))
+        } else {
+            Ok(JsValue::NULL)
+        }
+    })
+}
+
+/// Publish profile metadata (Kind 0 event)
+/// metadata_json should be a JSON string with fields like: name, display_name, about, picture, nip05
+#[wasm_bindgen]
+pub fn publish_profile_metadata(metadata_json: String) -> js_sys::Promise {
+    future_to_promise(async move {
+        let keys = get_keys()?;
+
+        // Parse JSON into Metadata struct
+        let metadata: nostr::Metadata = serde_json::from_str(&metadata_json)
+            .map_err(|e| JsValue::from_str(&format!("Failed to parse metadata: {}", e)))?;
+
+        // Create Kind 0 event
+        let event = EventBuilder::metadata(&metadata)
+            .sign_with_keys(&keys)
+            .map_err(|e| JsValue::from_str(&format!("Failed to sign event: {}", e)))?;
+
+        // Create and connect client
+        let client = create_connected_client().await?;
+
+        // Publish event
+        client.send_event(&event).await
+            .map_err(|e| JsValue::from_str(&format!("Failed to publish metadata: {}", e)))?;
+
+        // Disconnect
+        let _ = client.disconnect().await;
+
+        log("✅ Profile metadata published");
+        Ok(JsValue::from_str("success"))
+    })
 }
 
 /// Clear all stored keys and MDK state (for testing, keeps wallet)
