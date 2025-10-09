@@ -1149,6 +1149,47 @@ pub fn create_and_publish_keypackage() -> js_sys::Promise {
     })
 }
 
+/// Delete a KeyPackage by publishing a Kind 5 (deletion) event
+#[wasm_bindgen]
+pub fn delete_keypackage(event_id: String) -> js_sys::Promise {
+    future_to_promise(async move {
+        let result = async {
+            log(&format!("🗑️  Deleting KeyPackage: {}", event_id));
+
+            // Get keys
+            let keys = get_keys()?;
+
+            // Parse the event ID
+            let event_id_obj = nostr::EventId::from_hex(&event_id)
+                .map_err(|e| JsValue::from_str(&format!("Invalid event ID: {}", e)))?;
+
+            // Create Kind 5 (deletion) event
+            let deletion_event = EventBuilder::new(Kind::EventDeletion, "KeyPackage consumed")
+                .tag(nostr::Tag::event(event_id_obj))
+                .sign_with_keys(&keys)
+                .map_err(|e| JsValue::from_str(&format!("Failed to sign deletion event: {}", e)))?;
+
+            // Connect to relays and publish
+            let client = create_connected_client().await?;
+            let send_result = client.send_event(&deletion_event).await
+                .map_err(|e| JsValue::from_str(&format!("Failed to publish deletion: {}", e)))?;
+
+            log(&format!("✅ Kind 5 (delete) published for KeyPackage {}", event_id.chars().take(16).collect::<String>()));
+            for relay_url in send_result.success.iter() {
+                log(&format!("  ✓ {} accepted deletion", relay_url));
+            }
+
+            // Disconnect
+            let _ = client.disconnect().await;
+
+            Ok::<(), JsValue>(())
+        }
+        .await;
+
+        result.map(|_| JsValue::undefined())
+    })
+}
+
 /// DEBUG: Fetch all Kind 444 Welcome events for debugging
 /// Returns JSON array of events with their tags
 #[wasm_bindgen]
@@ -1487,7 +1528,7 @@ pub fn create_group_with_members(name: String, description: String, member_npubs
                 let filter = nostr::Filter::new()
                     .kind(Kind::Custom(443))
                     .author(pubkey)
-                    .limit(10);  // Get last 10, we'll pick the newest
+                    .limit(10);  // Get last 10, we'll pick the newest non-deleted
 
                 let events = client.fetch_events(filter, Duration::from_secs(10)).await
                     .map_err(|e| JsValue::from_str(&format!("Failed to fetch KeyPackages for {}: {}", npub, e)))?;
@@ -1496,13 +1537,48 @@ pub fn create_group_with_members(name: String, description: String, member_npubs
                     return Err(JsValue::from_str(&format!("No KeyPackage found for {}", npub)));
                 }
 
-                // Get the newest KeyPackage
-                let newest = events.iter()
+                // Fetch deletion events (Kind 5) from this author to filter out deleted KeyPackages
+                let deletion_filter = nostr::Filter::new()
+                    .kind(Kind::EventDeletion)
+                    .author(pubkey)
+                    .limit(50);  // Get recent deletions
+
+                let deletion_events = client.fetch_events(deletion_filter, Duration::from_secs(5)).await
+                    .map_err(|e| JsValue::from_str(&format!("Failed to fetch deletions: {}", e)))?;
+
+                // Collect deleted event IDs from 'e' tags
+                let deleted_ids: std::collections::HashSet<nostr::EventId> = deletion_events.iter()
+                    .flat_map(|del_event| {
+                        del_event.tags.iter().filter_map(|tag| {
+                            // Extract event ID from 'e' tags
+                            let tag_vec = tag.clone().to_vec();
+                            tag_vec.get(0)
+                                .filter(|&kind| kind == "e")
+                                .and_then(|_| tag_vec.get(1))
+                                .and_then(|id_str| nostr::EventId::from_hex(id_str).ok())
+                        })
+                    })
+                    .collect();
+
+                log(&format!("    Found {} deletion events covering {} KeyPackages",
+                    deletion_events.len(), deleted_ids.len()));
+
+                // Filter out deleted KeyPackages and get the newest remaining one
+                let available_kps: Vec<_> = events.iter()
+                    .filter(|e| !deleted_ids.contains(&e.id))
+                    .collect();
+
+                if available_kps.is_empty() {
+                    return Err(JsValue::from_str(&format!("No available (non-deleted) KeyPackage found for {}", npub)));
+                }
+
+                let newest = available_kps.iter()
                     .max_by_key(|e| e.created_at)
                     .unwrap();
 
-                log(&format!("    ✓ Found KeyPackage: {}", newest.id.to_hex()));
-                key_package_events.push(newest.clone());
+                log(&format!("    ✓ Found available KeyPackage: {} ({} deleted, {} available)",
+                    newest.id.to_hex(), deleted_ids.len(), available_kps.len()));
+                key_package_events.push((*newest).clone());
             }
 
             // Create group config
@@ -1668,12 +1744,45 @@ pub fn invite_member_to_group(group_id_hex: String, member_npub: String) -> js_s
                 return Err(JsValue::from_str(&format!("No KeyPackage found for {}. They may need to create one first.", &member_npub[..16])));
             }
 
-            // Get the newest KeyPackage
-            let newest = events.iter()
+            // Fetch deletion events (Kind 5) to filter out deleted KeyPackages
+            let deletion_filter = nostr::Filter::new()
+                .kind(Kind::EventDeletion)
+                .author(member_pubkey)
+                .limit(50);
+
+            let deletion_events = client.fetch_events(deletion_filter, Duration::from_secs(5)).await
+                .map_err(|e| JsValue::from_str(&format!("Failed to fetch deletions: {}", e)))?;
+
+            // Collect deleted event IDs from 'e' tags
+            let deleted_ids: std::collections::HashSet<nostr::EventId> = deletion_events.iter()
+                .flat_map(|del_event| {
+                    del_event.tags.iter().filter_map(|tag| {
+                        // Extract event ID from 'e' tags
+                        let tag_vec = tag.clone().to_vec();
+                        tag_vec.get(0)
+                            .filter(|&kind| kind == "e")
+                            .and_then(|_| tag_vec.get(1))
+                            .and_then(|id_str| nostr::EventId::from_hex(id_str).ok())
+                    })
+                })
+                .collect();
+
+            // Filter out deleted KeyPackages
+            let available_kps: Vec<_> = events.iter()
+                .filter(|e| !deleted_ids.contains(&e.id))
+                .collect();
+
+            if available_kps.is_empty() {
+                return Err(JsValue::from_str(&format!("No available (non-deleted) KeyPackage found for {}. They may need to create a new one.", &member_npub[..16])));
+            }
+
+            // Get the newest available KeyPackage
+            let newest = available_kps.iter()
                 .max_by_key(|e| e.created_at)
                 .unwrap();
 
-            log(&format!("  ✓ Found KeyPackage: {}", newest.id.to_hex()));
+            log(&format!("  ✓ Found available KeyPackage: {} ({} deleted, {} available)",
+                newest.id.to_hex(), deleted_ids.len(), available_kps.len()));
 
             // Get our keys
             let keys = get_keys()?;
@@ -1707,7 +1816,7 @@ pub fn invite_member_to_group(group_id_hex: String, member_npub: String) -> js_s
 
             // Step 2: Add member to group
             log("Adding member to group...");
-            let invite_result = mdk.add_members(&group_id, &[newest.clone()])
+            let invite_result = mdk.add_members(&group_id, &[(**newest).clone()])
                 .map_err(|e| JsValue::from_str(&format!("Failed to add member: {}", e)))?;
 
             mdk.merge_pending_commit(&group_id)
