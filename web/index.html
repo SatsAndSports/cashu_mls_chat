@@ -6,6 +6,8 @@
     <title>MDK Ecash Web Client</title>
     <!-- QR Code Scanner Library -->
     <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+    <!-- QR Code Generator Library -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
     <style>
         * {
             margin: 0;
@@ -349,16 +351,19 @@
             <div id="wallet-section" class="section">
                 <h2>💰 Wallet</h2>
 
-                <!-- Main action buttons -->
-                <div style="display: flex; gap: 15px; margin: 20px 0;">
-                    <button onclick="showReceiveModal()" style="flex: 1; padding: 15px 30px; font-size: 1.1em; background: #28a745; border-radius: 8px;">
+                <!-- Main action buttons (2x2 grid) -->
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin: 20px 0;">
+                    <button onclick="showReceiveModal()" style="padding: 15px 30px; font-size: 1.1em; background: #28a745; color: white; border: none; border-radius: 8px; cursor: pointer;">
                         📥 Receive e-cash
                     </button>
-                    <button onclick="showSendModal()" style="flex: 1; padding: 15px 30px; font-size: 1.1em; background: #0066cc; border-radius: 8px;">
+                    <button onclick="showSendModal()" style="padding: 15px 30px; font-size: 1.1em; background: #0066cc; color: white; border: none; border-radius: 8px; cursor: pointer;">
                         📤 Send e-cash
                     </button>
-                    <button onclick="showPayLightningModal()" style="flex: 1; padding: 15px 30px; font-size: 1.1em; background: #f59e0b; border-radius: 8px;">
-                        ⚡ Pay Lightning Invoice
+                    <button onclick="showReceiveLightningModal()" style="padding: 15px 30px; font-size: 1.1em; background: #8b5cf6; color: white; border: none; border-radius: 8px; cursor: pointer;">
+                        ⚡ Receive Lightning
+                    </button>
+                    <button onclick="showPayLightningModal()" style="padding: 15px 30px; font-size: 1.1em; background: #f59e0b; color: white; border: none; border-radius: 8px; cursor: pointer;">
+                        ⚡ Pay Lightning
                     </button>
                 </div>
 
@@ -498,6 +503,12 @@
                     <strong>Amount:</strong> <span id="invoice-amount">-</span> sats
                 </div>
                 <div style="margin-bottom: 10px;">
+                    <strong>Fee estimate:</strong> <span id="invoice-fee">-</span> sats
+                </div>
+                <div style="margin-bottom: 10px;">
+                    <strong>Total:</strong> <span id="invoice-total">-</span> sats
+                </div>
+                <div style="margin-bottom: 10px;">
                     <strong>Description:</strong> <span id="invoice-description">-</span>
                 </div>
                 <div style="margin-bottom: 10px;">
@@ -515,6 +526,58 @@
                     Pay Invoice
                 </button>
                 <button onclick="hidePayLightningModal()" style="padding: 12px 30px; background: #ccc; border: none; border-radius: 4px; cursor: pointer;">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Receive Lightning Modal -->
+    <div id="receive-lightning-modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000;">
+        <div style="background: white; max-width: 600px; margin: 50px auto; padding: 20px; border-radius: 8px;">
+            <h2>⚡ Receive Lightning</h2>
+
+            <div style="margin: 20px 0;">
+                <label style="display: block; margin-bottom: 5px; font-weight: bold;">Mint:</label>
+                <select id="receive-lightning-mint-select" style="width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 1em; font-family: monospace;">
+                    <option value="">Loading mints...</option>
+                </select>
+            </div>
+
+            <div style="margin: 20px 0;">
+                <label style="display: block; margin-bottom: 5px; font-weight: bold;">Amount (sats):</label>
+                <input type="number" id="receive-lightning-amount" placeholder="Enter amount" min="1" style="width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 1.1em;">
+            </div>
+
+            <div style="margin: 20px 0;">
+                <label style="display: block; margin-bottom: 5px; font-weight: bold;">Description (optional):</label>
+                <input type="text" id="receive-lightning-description" placeholder="What is this payment for?" style="width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 1em;">
+            </div>
+
+            <div id="receive-lightning-status" style="margin-top: 10px;"></div>
+
+            <!-- Invoice display (hidden until created) -->
+            <div id="receive-lightning-invoice" style="display: none; margin: 20px 0;">
+                <div style="padding: 15px; background: #f3f4f6; border-radius: 4px;">
+                    <label style="display: block; margin-bottom: 10px; font-weight: bold;">Lightning Invoice:</label>
+                    <textarea id="receive-lightning-invoice-text" readonly rows="4" style="width: 100%; font-family: monospace; padding: 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 0.85em; resize: none;"></textarea>
+                    <button onclick="copyReceiveLightningInvoice()" style="margin-top: 10px; padding: 8px 16px; background: #0066cc; color: white; border: none; border-radius: 4px; cursor: pointer;">📋 Copy Invoice</button>
+                </div>
+
+                <!-- QR Code display -->
+                <div style="margin-top: 20px; text-align: center;">
+                    <div style="font-weight: bold; margin-bottom: 10px;">Scan to Pay:</div>
+                    <div id="receive-lightning-qr" style="display: inline-block; padding: 10px; background: white; border: 2px solid #ccc; border-radius: 8px;"></div>
+                </div>
+
+                <div style="margin-top: 15px; padding: 10px; background: #fff3cd; border-radius: 4px; font-size: 0.9em;">
+                    ⏳ Waiting for payment... This invoice will expire in 10 minutes.
+                </div>
+            </div>
+
+            <div style="margin-top: 20px; display: flex; gap: 10px;">
+                <button id="create-invoice-button" onclick="createLightningInvoice()" style="flex: 1; padding: 12px; background: #8b5cf6; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 1em;">
+                    Create Invoice
+                </button>
+                <button onclick="hideReceiveLightningModal()" style="padding: 12px 30px; background: #ccc; border: none; border-radius: 4px; cursor: pointer;">Close</button>
             </div>
         </div>
     </div>
@@ -920,7 +983,9 @@
             send_ecash,
             parse_token_info,
             decode_lightning_invoice,
-            pay_lightning_invoice,
+            pay_lightning_invoice_with_quote,
+            create_lightning_invoice,
+            check_mint_quote,
             get_groups,
             fetch_welcome_events,
             process_pending_welcomes,
@@ -2795,6 +2860,7 @@
         // ========== Pay Lightning Invoice Modal Functions ==========
 
         let html5QrcodeScanner = null;
+        let currentMeltQuoteId = null;
 
         window.showPayLightningModal = async function() {
             document.getElementById('pay-lightning-modal').style.display = 'block';
@@ -2886,21 +2952,29 @@
                 const decodedJson = await decode_lightning_invoice(invoice);
                 const decoded = JSON.parse(decodedJson);
 
+                // Store quote ID for payment
+                currentMeltQuoteId = decoded.quote_id;
+
                 // Get current mint and balance
                 const currentMint = await get_current_mint();
                 const currentBalance = await get_balance();
 
                 // Display decoded info
-                document.getElementById('invoice-amount').textContent = decoded.amount_msat / 1000;
+                const amountSats = decoded.amount_msat / 1000;
+                const feeSats = decoded.fee_sats;
+                const totalSats = amountSats + feeSats;
+
+                document.getElementById('invoice-amount').textContent = amountSats;
+                document.getElementById('invoice-fee').textContent = feeSats;
+                document.getElementById('invoice-total').textContent = totalSats;
                 document.getElementById('invoice-description').textContent = decoded.description || '(none)';
                 document.getElementById('invoice-mint').textContent = currentMint.substring(0, 30) + '...';
                 document.getElementById('invoice-balance').textContent = currentBalance;
 
                 infoDiv.style.display = 'block';
 
-                // Enable pay button if sufficient balance
-                const amountSats = decoded.amount_msat / 1000;
-                if (currentBalance >= amountSats) {
+                // Enable pay button if sufficient balance (amount + fee)
+                if (currentBalance >= totalSats) {
                     payButton.disabled = false;
                     payButton.style.cursor = 'pointer';
                     payButton.style.opacity = '1';
@@ -2923,9 +2997,13 @@
         };
 
         window.payLightningInvoice = async function() {
-            const invoice = document.getElementById('lightning-invoice-input').value.trim();
             const statusDiv = document.getElementById('pay-lightning-status');
             const payButton = document.getElementById('pay-invoice-button');
+
+            if (!currentMeltQuoteId) {
+                statusDiv.innerHTML = '<div class="error">No quote available. Please decode the invoice first.</div>';
+                return;
+            }
 
             payButton.disabled = true;
             payButton.style.cursor = 'not-allowed';
@@ -2934,7 +3012,7 @@
             statusDiv.innerHTML = '<div>⏳ Paying invoice...</div>';
 
             try {
-                const resultJson = await pay_lightning_invoice(invoice);
+                const resultJson = await pay_lightning_invoice_with_quote(currentMeltQuoteId);
                 const result = JSON.parse(resultJson);
 
                 statusDiv.innerHTML = `
@@ -2957,6 +3035,163 @@
                 payButton.disabled = false;
                 payButton.style.cursor = 'pointer';
                 payButton.style.opacity = '1';
+            }
+        };
+
+        // ========== Receive Lightning Modal Functions ==========
+
+        async function loadReceiveLightningMintOptions() {
+            const selectEl = document.getElementById('receive-lightning-mint-select');
+
+            try {
+                const mintsJson = await get_trusted_mints();
+                const mints = JSON.parse(mintsJson);
+                const currentMint = await get_current_mint();
+
+                if (mints.length === 0) {
+                    selectEl.innerHTML = '<option value="">No trusted mints</option>';
+                    return;
+                }
+
+                // Build options - mints is just an array of URLs
+                selectEl.innerHTML = mints.map(mintUrl => {
+                    const selected = mintUrl === currentMint ? 'selected' : '';
+                    return `<option value="${mintUrl}" ${selected}>${mintUrl}</option>`;
+                }).join('');
+            } catch (err) {
+                console.error('Failed to load mints:', err);
+                selectEl.innerHTML = '<option value="">Error loading mints</option>';
+            }
+        }
+
+        window.showReceiveLightningModal = async function() {
+            document.getElementById('receive-lightning-modal').style.display = 'block';
+            document.getElementById('receive-lightning-amount').value = '';
+            document.getElementById('receive-lightning-description').value = '';
+            document.getElementById('receive-lightning-status').innerHTML = '';
+            document.getElementById('receive-lightning-invoice').style.display = 'none';
+            document.getElementById('create-invoice-button').disabled = false;
+            document.getElementById('create-invoice-button').style.opacity = '1';
+            document.getElementById('create-invoice-button').style.cursor = 'pointer';
+
+            // Load mint options
+            await loadReceiveLightningMintOptions();
+        };
+
+        window.hideReceiveLightningModal = function() {
+            document.getElementById('receive-lightning-modal').style.display = 'none';
+        };
+
+        window.createLightningInvoice = async function() {
+            const amount = parseInt(document.getElementById('receive-lightning-amount').value);
+            const description = document.getElementById('receive-lightning-description').value.trim();
+            const selectedMint = document.getElementById('receive-lightning-mint-select').value;
+            const statusDiv = document.getElementById('receive-lightning-status');
+            const createButton = document.getElementById('create-invoice-button');
+
+            if (!amount || amount < 1) {
+                statusDiv.innerHTML = '<div class="error">Please enter a valid amount</div>';
+                return;
+            }
+
+            if (!selectedMint) {
+                statusDiv.innerHTML = '<div class="error">Please select a mint</div>';
+                return;
+            }
+
+            createButton.disabled = true;
+            createButton.style.opacity = '0.5';
+            createButton.style.cursor = 'not-allowed';
+
+            statusDiv.innerHTML = '<div>Creating invoice...</div>';
+
+            try {
+                const resultJson = await create_lightning_invoice(selectedMint, BigInt(amount), description || '');
+                const result = JSON.parse(resultJson);
+
+                // Display invoice
+                document.getElementById('receive-lightning-invoice-text').value = result.invoice;
+                document.getElementById('receive-lightning-invoice').style.display = 'block';
+
+                // Generate QR code
+                const qrContainer = document.getElementById('receive-lightning-qr');
+                qrContainer.innerHTML = ''; // Clear previous QR
+                new QRCode(qrContainer, {
+                    text: result.invoice.toUpperCase(),
+                    width: 256,
+                    height: 256,
+                    correctLevel: QRCode.CorrectLevel.M
+                });
+
+                statusDiv.innerHTML = '<div class="success">✅ Invoice created!</div>';
+
+                // Poll for payment status
+                pollMintQuoteStatus(result.mint_url, result.quote_id);
+            } catch (err) {
+                console.error('Failed to create invoice:', err);
+                statusDiv.innerHTML = `<div class="error">Failed to create invoice: ${err}</div>`;
+                createButton.disabled = false;
+                createButton.style.opacity = '1';
+                createButton.style.cursor = 'pointer';
+            }
+        };
+
+        async function pollMintQuoteStatus(mintUrl, quoteId) {
+            const maxAttempts = 120; // Poll for up to 10 minutes (120 * 5 seconds)
+            let attempts = 0;
+
+            const checkStatus = async () => {
+                attempts++;
+                console.log(`Checking mint quote status (attempt ${attempts}/${maxAttempts})...`);
+
+                try {
+                    const resultJson = await check_mint_quote(mintUrl, quoteId);
+                    const result = JSON.parse(resultJson);
+
+                    if (result.paid) {
+                        console.log('Invoice paid! Tokens minted:', result.amount);
+                        showToast(`✅ Payment received! Minted ${result.amount} sats`);
+
+                        // Update balance display
+                        await refreshMintBalances();
+
+                        // Close modal after short delay
+                        setTimeout(() => {
+                            hideReceiveLightningModal();
+                        }, 2000);
+
+                        return; // Stop polling
+                    }
+
+                    // Continue polling if not paid and haven't exceeded max attempts
+                    if (attempts < maxAttempts) {
+                        setTimeout(checkStatus, 5000); // Check again in 5 seconds
+                    } else {
+                        console.log('Invoice polling timed out');
+                        showToast('⏱️ Invoice expired or payment not detected');
+                    }
+                } catch (err) {
+                    console.error('Failed to check quote status:', err);
+
+                    // Continue polling even on error (might be temporary network issue)
+                    if (attempts < maxAttempts) {
+                        setTimeout(checkStatus, 5000);
+                    }
+                }
+            };
+
+            // Start polling
+            checkStatus();
+        }
+
+        window.copyReceiveLightningInvoice = async function() {
+            const invoice = document.getElementById('receive-lightning-invoice-text').value;
+            try {
+                await navigator.clipboard.writeText(invoice);
+                showToast('📋 Invoice copied to clipboard');
+            } catch (err) {
+                console.error('Failed to copy invoice:', err);
+                showToast('❌ Failed to copy invoice');
             }
         };
 

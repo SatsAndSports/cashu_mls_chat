@@ -19,6 +19,7 @@ use mdk_storage::{MdkHybridStorage, SharedMdkStorage};
 use cdk::wallet::{Wallet, WalletBuilder, ReceiveOptions};
 use cdk::nuts::{CurrencyUnit, Token};
 use cdk::mint_url::MintUrl;
+use cdk::amount::SplitTarget;
 
 use mdk_core::MDK;
 use mdk_storage_traits::GroupId;
@@ -911,57 +912,64 @@ pub fn receive_token(token_str: String) -> js_sys::Promise {
     })
 }
 
-/// Decode a Lightning invoice to extract amount and description
-/// Returns JSON with: { amount_msat, description }
+/// Decode a Lightning invoice to extract amount, description, and fee
+/// Returns JSON with: { amount_msat, description, fee_sats }
 #[wasm_bindgen]
 pub fn decode_lightning_invoice(invoice: String) -> js_sys::Promise {
     future_to_promise(async move {
-        use cdk_common::lightning_invoice::Bolt11Invoice;
+        let result = async {
+            use cdk_common::lightning_invoice::Bolt11Invoice;
 
-        let parsed = Bolt11Invoice::from_str(&invoice)
-            .map_err(|e| JsValue::from_str(&format!("Invalid invoice: {}", e)))?;
+            let parsed = Bolt11Invoice::from_str(&invoice)
+                .map_err(|e| JsValue::from_str(&format!("Invalid invoice: {}", e)))?;
 
-        let amount_msat = parsed.amount_milli_satoshis()
-            .ok_or_else(|| JsValue::from_str("Invoice has no amount"))?;
+            let amount_msat = parsed.amount_milli_satoshis()
+                .ok_or_else(|| JsValue::from_str("Invoice has no amount"))?;
 
-        let description = match parsed.description() {
-            cdk_common::lightning_invoice::Bolt11InvoiceDescriptionRef::Direct(desc) => desc.to_string(),
-            cdk_common::lightning_invoice::Bolt11InvoiceDescriptionRef::Hash(_) => String::new(),
-        };
+            let description = match parsed.description() {
+                cdk_common::lightning_invoice::Bolt11InvoiceDescriptionRef::Direct(desc) => desc.to_string(),
+                cdk_common::lightning_invoice::Bolt11InvoiceDescriptionRef::Hash(_) => String::new(),
+            };
 
-        let result = serde_json::json!({
-            "amount_msat": amount_msat,
-            "description": description
-        });
+            // Get fee estimate from melt quote
+            let wallet = create_wallet().await?;
+            let quote = wallet
+                .melt_quote(invoice.clone(), None)
+                .await
+                .map_err(|e| JsValue::from_str(&format!("Failed to get fee quote: {}", e)))?;
 
-        Ok(JsValue::from_str(&result.to_string()))
+            let fee_sats = u64::from(quote.fee_reserve);
+
+            let result = serde_json::json!({
+                "amount_msat": amount_msat,
+                "description": description,
+                "fee_sats": fee_sats,
+                "quote_id": quote.id
+            });
+
+            Ok::<String, JsValue>(result.to_string())
+        }
+        .await;
+
+        result.map(|json| JsValue::from_str(&json))
     })
 }
 
-/// Pay a Lightning invoice using the current mint
+/// Pay a Lightning invoice using a melt quote ID
 /// Returns JSON with: { preimage }
 #[wasm_bindgen]
-pub fn pay_lightning_invoice(invoice: String) -> js_sys::Promise {
+pub fn pay_lightning_invoice_with_quote(quote_id: String) -> js_sys::Promise {
     future_to_promise(async move {
         let result = async {
-            log(&format!("Paying Lightning invoice..."));
+            log(&format!("Paying Lightning invoice with quote {}...", quote_id));
 
             // Create wallet for current mint
             let wallet = create_wallet().await?;
 
-            // Step 1: Create melt quote
-            log("Creating melt quote...");
-            let quote = wallet
-                .melt_quote(invoice.clone(), None)
-                .await
-                .map_err(|e| JsValue::from_str(&format!("Failed to create melt quote: {}", e)))?;
-
-            log(&format!("Melt quote created: {} sats fee", quote.fee_reserve));
-
-            // Step 2: Pay the invoice using the quote
+            // Pay the invoice using the quote
             log("Melting tokens to pay invoice...");
             let melt_response = wallet
-                .melt(&quote.id)
+                .melt(&quote_id)
                 .await
                 .map_err(|e| JsValue::from_str(&format!("Failed to pay invoice: {}", e)))?;
 
@@ -975,6 +983,96 @@ pub fn pay_lightning_invoice(invoice: String) -> js_sys::Promise {
             });
 
             Ok::<String, JsValue>(result.to_string())
+        }
+        .await;
+
+        result.map(|json| JsValue::from_str(&json))
+    })
+}
+
+/// Create a Lightning invoice (mint quote) to receive sats
+/// Returns JSON with: { invoice, quote_id, mint_url }
+#[wasm_bindgen]
+pub fn create_lightning_invoice(mint_url: String, amount: u64, description: String) -> js_sys::Promise {
+    future_to_promise(async move {
+        let result = async {
+            log(&format!("Creating Lightning invoice for {} sats on mint {}...", amount, mint_url));
+
+            // Create wallet for selected mint
+            let wallet = create_wallet_for_mint(mint_url.clone()).await?;
+
+            // Create mint quote
+            let quote = wallet
+                .mint_quote(cdk::Amount::from(amount), Some(description.clone()))
+                .await
+                .map_err(|e| JsValue::from_str(&format!("Failed to create mint quote: {}", e)))?;
+
+            log(&format!("✅ Invoice created: {}", &quote.request[..20.min(quote.request.len())]));
+
+            let result = serde_json::json!({
+                "invoice": quote.request,
+                "quote_id": quote.id,
+                "mint_url": mint_url
+            });
+
+            Ok::<String, JsValue>(result.to_string())
+        }
+        .await;
+
+        result.map(|json| JsValue::from_str(&json))
+    })
+}
+
+/// Check mint quote status and mint tokens if paid
+/// Returns JSON with: { paid: bool, amount?: number }
+#[wasm_bindgen]
+pub fn check_mint_quote(mint_url: String, quote_id: String) -> js_sys::Promise {
+    future_to_promise(async move {
+        let result = async {
+            log(&format!("Checking mint quote {} status...", quote_id));
+
+            // Create wallet for the mint
+            let wallet = create_wallet_for_mint(mint_url).await?;
+
+            // Check quote status
+            let quote_status = wallet
+                .mint_quote_state(&quote_id)
+                .await
+                .map_err(|e| JsValue::from_str(&format!("Failed to check quote status: {}", e)))?;
+
+            log(&format!("Quote status - State: {:?}", quote_status.state));
+
+            // Check if paid
+            use cdk::nuts::MintQuoteState;
+            if quote_status.state == MintQuoteState::Paid {
+                log("Quote is paid! Minting tokens...");
+
+                // Mint the tokens
+                let proofs = wallet
+                    .mint(&quote_id, SplitTarget::default(), None)
+                    .await
+                    .map_err(|e| JsValue::from_str(&format!("Failed to mint tokens: {}", e)))?;
+
+                // Calculate total amount from proofs
+                let total_amount: u64 = proofs.iter().map(|p| u64::from(p.amount)).sum();
+
+                log(&format!("✅ Minted {} sats", total_amount));
+
+                let result = serde_json::json!({
+                    "paid": true,
+                    "amount": total_amount
+                });
+
+                Ok::<String, JsValue>(result.to_string())
+            } else {
+                log("Quote not paid yet");
+
+                let result = serde_json::json!({
+                    "paid": false
+                });
+
+                Ok::<String, JsValue>(result.to_string())
+            }
         }
         .await;
 
