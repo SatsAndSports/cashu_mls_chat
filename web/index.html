@@ -351,7 +351,8 @@
                 <div id="chat-messages" style="height: 400px; overflow-y: auto; border: 1px solid #ccc; padding: 10px; margin-bottom: 10px; background: #f9f9f9;">
                     <p style="color: #666;">Loading messages...</p>
                 </div>
-                <div style="display: flex; gap: 10px;">
+                <div style="display: flex; gap: 10px; align-items: center;">
+                    <button onclick="showSendEcashInChatModal()" style="padding: 10px 15px; font-size: 1.2em; background: #ff8800; border: none; border-radius: 4px; cursor: pointer;" title="Send e-cash to group">₿</button>
                     <input type="text" id="chat-input" placeholder="Type a message..." style="flex: 1; padding: 10px; border: 1px solid #ccc; border-radius: 4px;">
                     <button id="send-button" onclick="sendChatMessage()" style="padding: 10px 20px;">Send</button>
                 </div>
@@ -508,6 +509,28 @@
             <div style="display: flex; gap: 10px; margin-top: 20px;">
                 <button onclick="addMintAndRedeem()" style="flex: 1; padding: 12px; background: #ff6600; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 1em;">Add to Trusted & Redeem</button>
                 <button onclick="closeUntrustedMintModal()" style="padding: 12px 30px; background: #ccc; border: none; border-radius: 4px; cursor: pointer;">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Send E-cash in Chat Modal -->
+    <div id="send-ecash-chat-modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000;">
+        <div style="background: white; max-width: 600px; margin: 50px auto; padding: 20px; border-radius: 8px;">
+            <h2>₿ Send e-cash to Group</h2>
+            <div style="margin: 20px 0;">
+                <label style="display: block; margin-bottom: 5px; font-weight: bold;">Mint:</label>
+                <select id="send-ecash-chat-mint-select" style="width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 1em; font-family: monospace;">
+                    <option value="">Loading mints...</option>
+                </select>
+            </div>
+            <div style="margin: 20px 0;">
+                <label style="display: block; margin-bottom: 5px; font-weight: bold;">Amount (sats):</label>
+                <input type="number" id="send-ecash-chat-amount" placeholder="" min="1" style="width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 1.1em;">
+            </div>
+            <div id="send-ecash-chat-status" style="margin-top: 10px;"></div>
+            <div style="margin-top: 20px; display: flex; gap: 10px;">
+                <button onclick="sendEcashToChat()" style="flex: 1; padding: 12px; background: #ff8800; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 1em;">Send to Group</button>
+                <button onclick="hideSendEcashInChatModal()" style="padding: 12px 30px; background: #ccc; border: none; border-radius: 4px; cursor: pointer;">Cancel</button>
             </div>
         </div>
     </div>
@@ -1786,6 +1809,102 @@
             } catch (err) {
                 console.error('Failed to create token:', err);
                 statusDiv.innerHTML = `<div class="error">Failed to create token: ${err}</div>`;
+            }
+        };
+
+        // Send e-cash in chat modal functions
+        window.showSendEcashInChatModal = async function() {
+            if (!currentChatGroupId) {
+                alert('No chat group selected');
+                return;
+            }
+
+            document.getElementById('send-ecash-chat-modal').style.display = 'block';
+            document.getElementById('send-ecash-chat-amount').value = '';
+            document.getElementById('send-ecash-chat-status').innerHTML = '';
+
+            // Load mints with balances
+            await loadSendEcashChatMintOptions();
+        };
+
+        window.hideSendEcashInChatModal = function() {
+            document.getElementById('send-ecash-chat-modal').style.display = 'none';
+        };
+
+        async function loadSendEcashChatMintOptions() {
+            const selectEl = document.getElementById('send-ecash-chat-mint-select');
+
+            try {
+                const balancesJson = await get_all_mint_balances();
+                const balances = JSON.parse(balancesJson);
+                const currentMint = await get_current_mint();
+
+                if (balances.length === 0) {
+                    selectEl.innerHTML = '<option value="">No mints with balance</option>';
+                    return;
+                }
+
+                // Build options
+                selectEl.innerHTML = balances.map(b => {
+                    const selected = b.mint === currentMint ? 'selected' : '';
+                    const trustBadge = b.is_trusted ? '' : ' [UNTRUSTED]';
+                    return `<option value="${b.mint}" ${selected}>${b.mint}${trustBadge} (${b.balance} sats)</option>`;
+                }).join('');
+            } catch (err) {
+                console.error('Failed to load mints:', err);
+                selectEl.innerHTML = '<option value="">Error loading mints</option>';
+            }
+        }
+
+        window.sendEcashToChat = async function() {
+            const amount = parseInt(document.getElementById('send-ecash-chat-amount').value);
+            const selectedMint = document.getElementById('send-ecash-chat-mint-select').value;
+            const statusDiv = document.getElementById('send-ecash-chat-status');
+
+            if (!amount || amount <= 0) {
+                statusDiv.innerHTML = '<div class="error">Please enter a valid amount</div>';
+                return;
+            }
+
+            if (!selectedMint) {
+                statusDiv.innerHTML = '<div class="error">Please select a mint</div>';
+                return;
+            }
+
+            if (!currentChatGroupId) {
+                statusDiv.innerHTML = '<div class="error">No chat group selected</div>';
+                return;
+            }
+
+            statusDiv.innerHTML = 'Creating token...';
+
+            try {
+                // Set selected mint as current
+                const originalMint = await get_current_mint();
+                await set_current_mint(selectedMint);
+
+                // Create token
+                const token = await send_ecash(BigInt(amount));
+
+                // Restore original mint
+                await set_current_mint(originalMint);
+
+                statusDiv.innerHTML = 'Sending to group...';
+
+                // Send token as message to group
+                await send_message_to_group(currentChatGroupId, token);
+
+                // Update balance display
+                await refreshMintBalances();
+
+                // Close modal
+                hideSendEcashInChatModal();
+
+                // Reload messages to show the sent token
+                await loadMessages(currentChatGroupId);
+            } catch (err) {
+                console.error('Failed to send e-cash to chat:', err);
+                statusDiv.innerHTML = `<div class="error">Failed to send: ${err}</div>`;
             }
         };
 
