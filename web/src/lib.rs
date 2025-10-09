@@ -2370,7 +2370,14 @@ pub fn send_message_to_group(group_id_hex: String, message_content: String) -> j
             // Create encrypted message
             log("  Encrypting message with MLS...");
             let message_event = mdk.create_message(&group_id, rumor)
-                .map_err(|e| JsValue::from_str(&format!("Failed to create message: {}", e)))?;
+                .map_err(|e| {
+                    use mdk_core::error::Error;
+                    if matches!(e, Error::OwnLeafNotFound) {
+                        JsValue::from_str("You have been removed from this group and can no longer send messages")
+                    } else {
+                        JsValue::from_str(&format!("Failed to create message: {}", e))
+                    }
+                })?;
             log(&format!("  ✓ Message encrypted, event ID: {}", message_event.id.to_hex()));
 
             // Publish to relays
@@ -2583,6 +2590,17 @@ pub fn subscribe_to_group_messages(group_id_hex: String, callback: js_sys::Funct
                                                     Another group member performed an action at the same time as you.\n\
                                                     Their action was processed first.\n\n\
                                                     Please try your action again (send message, invite member, etc.)."
+                                                );
+                                            }
+                                        } else if matches!(e, Error::OwnLeafNotFound) {
+                                            log(&format!("  ℹ️  You have been removed from this group"));
+
+                                            // Show user-friendly notification
+                                            if let Some(window) = web_sys::window() {
+                                                let _ = window.alert_with_message(
+                                                    "🚪 You've been removed from this group\n\n\
+                                                    An admin has removed you from the group.\n\
+                                                    You can no longer send or receive messages."
                                                 );
                                             }
                                         } else {

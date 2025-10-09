@@ -2941,23 +2941,15 @@
                     return;
                 }
 
-                const ourPubkeyHex = await get_pubkey_hex();
-                const isAdmin = group.admin_npubs.some(npub => {
-                    // Convert npub to hex and compare
-                    try {
-                        const pk = window.NostrTools?.nip19?.decode(npub)?.data;
-                        return pk === ourPubkeyHex;
-                    } catch {
-                        return false;
-                    }
-                });
+                const ourNpub = await get_npub();
+                const isAdmin = group.admin_npubs.includes(ourNpub);
 
                 // Build members list
                 let html = '<div style="max-height: 400px; overflow-y: auto;">';
 
                 for (const memberNpub of group.member_npubs) {
                     const isAdminMember = group.admin_npubs.includes(memberNpub);
-                    const isUs = memberNpub === await get_npub();
+                    const isUs = memberNpub === ourNpub;
 
                     html += `
                         <div style="display: flex; justify-content: space-between; align-items: center; padding: 12px; border-bottom: 1px solid #eee;">
