@@ -1,6 +1,6 @@
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::future_to_promise;
-use nostr::{Keys, ToBech32, FromBech32, EventBuilder, Kind, RelayUrl};
+use nostr::{Keys, ToBech32, FromBech32, EventBuilder, Kind, RelayUrl, SecretKey};
 use nostr_sdk::{Client, RelayPoolNotification};
 use web_sys::{window, Storage};
 use std::sync::Arc;
@@ -242,6 +242,38 @@ pub fn get_npub() -> Result<String, JsValue> {
         .map_err(|e| JsValue::from_str(&format!("Failed to parse keys: {}", e)))?;
 
     Ok(keys.public_key().to_bech32().expect("bech32 encoding is infallible"))
+}
+
+#[wasm_bindgen]
+pub fn get_nsec() -> Result<String, JsValue> {
+    let storage = get_local_storage()?;
+
+    let secret_hex = storage
+        .get_item("nostr_secret_key")?
+        .ok_or_else(|| JsValue::from_str("No keys found in localStorage"))?;
+
+    let keys = Keys::parse(&secret_hex)
+        .map_err(|e| JsValue::from_str(&format!("Failed to parse keys: {}", e)))?;
+
+    Ok(keys.secret_key().to_bech32().expect("bech32 encoding is infallible"))
+}
+
+/// Import an existing nsec and set it as the current identity
+#[wasm_bindgen]
+pub fn import_nsec(nsec: &str) -> Result<(), JsValue> {
+    // Parse the nsec to validate it and convert to hex
+    let secret_key = SecretKey::from_bech32(nsec)
+        .map_err(|e| JsValue::from_str(&format!("Invalid nsec: {}", e)))?;
+
+    let keys = Keys::new(secret_key);
+
+    // Store in localStorage as hex
+    let storage = get_local_storage()?;
+    storage.set_item("nostr_secret_key", &keys.secret_key().to_secret_hex())
+        .map_err(|e| JsValue::from_str(&format!("Failed to store keys: {:?}", e)))?;
+
+    log(&format!("Imported identity: {}", keys.public_key().to_hex()));
+    Ok(())
 }
 
 /// Get the public key in hex format

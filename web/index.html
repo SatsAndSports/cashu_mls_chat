@@ -307,8 +307,8 @@
                     <div class="npub" id="npub"></div>
                 </div>
                 <div id="buttons" style="display: none;">
-                    <button onclick="newKeys()">Generate New Keys</button>
-                    <button onclick="clearKeys()">Clear Keys</button>
+                    <button onclick="showResetIdentityModal()" style="background: #dc3545;">⚠️ Reset Identity</button>
+                    <button onclick="showSignInModal()" style="background: #0066cc;">🔑 Sign In With Existing Key</button>
                 </div>
 
                 <!-- Key Packages Section -->
@@ -572,6 +572,80 @@
         </div>
     </div>
 
+    <!-- Reset Identity Modal -->
+    <div id="reset-identity-modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000;">
+        <div style="background: white; max-width: 600px; margin: 50px auto; padding: 30px; border-radius: 8px;">
+            <h2 style="color: #dc3545;">⚠️ Reset Identity Warning</h2>
+
+            <div style="background: #fff3cd; border: 2px solid #ffc107; border-radius: 8px; padding: 20px; margin: 20px 0;">
+                <p style="font-weight: bold; margin-bottom: 10px;">⚠️ This will permanently delete your current identity!</p>
+                <p style="margin-bottom: 15px;">Before proceeding, please backup your secret key (nsec):</p>
+
+                <div style="background: white; border: 1px solid #ddd; border-radius: 4px; padding: 15px; margin: 15px 0;">
+                    <div style="font-weight: bold; margin-bottom: 5px;">Your Secret Key (nsec):</div>
+                    <div id="reset-nsec-display" style="font-family: monospace; font-size: 0.9em; cursor: pointer; user-select: all; padding: 10px; background: #f9f9f9; border-radius: 4px;" onclick="revealNsec()">
+                        ••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••
+                    </div>
+                    <div style="font-size: 0.85em; color: #666; margin-top: 5px;">
+                        Click to reveal
+                    </div>
+                </div>
+
+                <p style="color: #dc3545; font-weight: bold; margin-top: 15px;">
+                    This will delete:
+                </p>
+                <ul style="margin: 10px 0; padding-left: 25px;">
+                    <li>All your group memberships</li>
+                    <li>All your messages</li>
+                    <li>All KeyPackages</li>
+                    <li>Your Nostr identity</li>
+                </ul>
+                <p style="color: #28a745; font-weight: bold; margin-top: 10px;">
+                    ✓ Your wallet balance will be preserved
+                </p>
+            </div>
+
+            <div style="margin-top: 20px; display: flex; gap: 10px;">
+                <button onclick="confirmResetIdentity()" style="flex: 1; padding: 15px; background: #dc3545; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 1em; font-weight: bold;">I've Backed Up My Key - Reset Identity</button>
+                <button onclick="closeResetIdentityModal()" style="padding: 15px 30px; background: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Sign In Modal -->
+    <div id="signin-modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000;">
+        <div style="background: white; max-width: 600px; margin: 50px auto; padding: 30px; border-radius: 8px;">
+            <h2>🔑 Sign In With Existing Key</h2>
+
+            <div style="background: #e7f3ff; border: 2px solid #0066cc; border-radius: 8px; padding: 20px; margin: 20px 0;">
+                <p style="font-weight: bold; margin-bottom: 10px;">Enter your secret key (nsec) to sign in:</p>
+
+                <div style="margin: 15px 0;">
+                    <textarea id="signin-nsec-input" placeholder="nsec1..." style="width: 100%; min-height: 80px; padding: 10px; font-family: monospace; font-size: 0.9em; border: 1px solid #ddd; border-radius: 4px; resize: vertical;"></textarea>
+                </div>
+
+                <p style="color: #dc3545; font-weight: bold; margin-top: 15px;">
+                    ⚠️ This will delete your current:
+                </p>
+                <ul style="margin: 10px 0; padding-left: 25px;">
+                    <li>All group memberships</li>
+                    <li>All messages</li>
+                    <li>All KeyPackages</li>
+                </ul>
+                <p style="color: #28a745; font-weight: bold; margin-top: 10px;">
+                    ✓ Your wallet balance will be preserved
+                </p>
+            </div>
+
+            <div id="signin-status" style="margin: 15px 0; color: #dc3545;"></div>
+
+            <div style="margin-top: 20px; display: flex; gap: 10px;">
+                <button onclick="confirmSignIn()" style="flex: 1; padding: 15px; background: #0066cc; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 1em; font-weight: bold;">Sign In</button>
+                <button onclick="closeSignInModal()" style="padding: 15px 30px; background: #ccc; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;">Cancel</button>
+            </div>
+        </div>
+    </div>
+
     <style>
         @keyframes spin {
             0% { transform: rotate(0deg); }
@@ -712,6 +786,8 @@
             get_or_create_keys,
             generate_keys,
             get_npub,
+            get_nsec,
+            import_nsec,
             get_pubkey_hex,
             clear_keys,
             init_wallet,
@@ -1791,31 +1867,102 @@
             }
         }
 
-        window.newKeys = async function() {
-            try {
-                const npub = generate_keys();
-                document.getElementById('npub').textContent = npub;
-                log("New keys generated: " + npub);
-                alert('New keys generated! Previous keys are overwritten.');
-            } catch (err) {
-                console.error('Failed to generate keys:', err);
-                alert('Failed to generate keys: ' + err);
-            }
+        // Reset Identity Modal Functions
+        window.showResetIdentityModal = function() {
+            // Show asterisks initially
+            document.getElementById('reset-nsec-display').textContent = '••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••';
+            document.getElementById('reset-nsec-display').dataset.revealed = 'false';
+            document.getElementById('reset-identity-modal').style.display = 'block';
         };
 
-        window.clearKeys = async function() {
-            if (confirm('Are you sure you want to clear your keys? This cannot be undone!')) {
+        window.closeResetIdentityModal = function() {
+            document.getElementById('reset-identity-modal').style.display = 'none';
+        };
+
+        window.revealNsec = function() {
+            const display = document.getElementById('reset-nsec-display');
+            if (display.dataset.revealed === 'true') {
+                // Hide again
+                display.textContent = '••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••';
+                display.dataset.revealed = 'false';
+            } else {
+                // Reveal the nsec
                 try {
-                    clear_keys();
-                    document.getElementById('npub-container').style.display = 'none';
-                    document.getElementById('status').innerHTML =
-                        '<div class="success">Keys cleared. Reload page to generate new keys.</div>';
+                    const nsec = get_nsec();
+                    display.textContent = nsec;
+                    display.dataset.revealed = 'true';
                 } catch (err) {
-                    console.error('Failed to clear keys:', err);
-                    alert('Failed to clear keys: ' + err);
+                    console.error('Failed to get nsec:', err);
+                    display.textContent = 'Error loading nsec';
                 }
             }
         };
+
+        window.confirmResetIdentity = function() {
+            try {
+                clear_keys();
+                closeResetIdentityModal();
+                // Reload the page to start fresh
+                window.location.reload();
+            } catch (err) {
+                console.error('Failed to reset identity:', err);
+                alert('Failed to reset identity: ' + err);
+            }
+        };
+
+        // Sign In With Existing Key Modal Functions
+        window.showSignInModal = function() {
+            document.getElementById('signin-nsec-input').value = '';
+            document.getElementById('signin-modal').style.display = 'block';
+        };
+
+        window.closeSignInModal = function() {
+            document.getElementById('signin-modal').style.display = 'none';
+        };
+
+        window.confirmSignIn = async function() {
+            const nsecInput = document.getElementById('signin-nsec-input').value.trim();
+
+            if (!nsecInput) {
+                alert('Please enter an nsec key');
+                return;
+            }
+
+            if (!nsecInput.startsWith('nsec1')) {
+                alert('Invalid nsec format. Should start with "nsec1"');
+                return;
+            }
+
+            try {
+                // Clear all data except wallet
+                clearAllExceptWallet();
+
+                // Import the new nsec
+                import_nsec(nsecInput);
+
+                closeSignInModal();
+
+                // Reload the page to start fresh with new identity
+                window.location.reload();
+            } catch (err) {
+                console.error('Failed to sign in:', err);
+                alert('Failed to sign in: ' + err);
+            }
+        };
+
+        // Helper function to clear all localStorage except wallet data
+        function clearAllExceptWallet() {
+            // Save wallet state (this is the key used by HybridWalletDatabase)
+            const walletState = localStorage.getItem('wallet_state');
+
+            // Clear everything
+            localStorage.clear();
+
+            // Restore wallet data
+            if (walletState) {
+                localStorage.setItem('wallet_state', walletState);
+            }
+        }
 
         // ==========================================
         // KEY PACKAGE MANAGEMENT
