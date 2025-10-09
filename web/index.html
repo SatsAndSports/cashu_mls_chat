@@ -318,7 +318,7 @@
                 <div id="keypackages-container" style="display: none; margin-top: 30px; padding-top: 20px; border-top: 1px solid #ddd;">
                     <h3>Key Packages</h3>
                     <p style="font-size: 0.9em; color: #666; margin-bottom: 15px;">
-                        Key Packages allow others to invite you to groups. When someone adds you to a group, they fetch your most recent Key Package from relays.
+                        Key Packages allow others to invite you to groups. When someone adds you to a group, they fetch your most recent non-deleted (Kind 5) Key Package from relays. Packages are deleted automatically when you join a group.
                     </p>
 
                     <div id="keypackage-nudge" style="display: none; background: #fff3cd; border: 1px solid #ffc107; border-radius: 4px; padding: 15px; margin-bottom: 15px;">
@@ -1022,7 +1022,7 @@
                 await initializeWelcomeSubscription();
 
                 document.getElementById('buttons').style.display = 'block';
-                document.getElementById('status').innerHTML = '<div class="success">✓ Ready</div>';
+                document.getElementById('status').innerHTML = '';
 
                 // Set up periodic save (every 30 seconds) for received messages
                 setInterval(async () => {
@@ -1093,7 +1093,7 @@
                 document.getElementById('wallet-status').textContent = 'Initializing wallet...';
 
                 await init_wallet();
-                document.getElementById('wallet-status').innerHTML = '<div class="success">✓ Wallet ready</div>';
+                document.getElementById('wallet-status').innerHTML = '';
 
                 // Load and display balances
                 await refreshMintBalances();
