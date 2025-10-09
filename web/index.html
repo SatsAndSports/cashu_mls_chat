@@ -375,15 +375,6 @@
                 <div id="groups-list"></div>
                 <button onclick="showCreateGroupModal()">➕ Create New Group</button>
 
-                <!-- Sent Invitations Section -->
-                <div id="sent-invitations-container" style="display: none; margin-top: 30px; padding-top: 20px; border-top: 1px solid #ddd;">
-                    <h3>Sent Invitations</h3>
-                    <p style="font-size: 0.9em; color: #666; margin-bottom: 15px;">
-                        Track invitations you've sent to other users.
-                    </p>
-
-                    <div id="sent-invitations-list"></div>
-                </div>
             </div>
 
             <!-- Chat Section -->
@@ -907,18 +898,6 @@
             localStorage.setItem('consumed_keypackages', JSON.stringify(consumed));
         }
 
-        // Sent invitations tracking
-        function getSentInvitations() {
-            const data = localStorage.getItem('sent_invitations');
-            return data ? JSON.parse(data) : [];
-        }
-
-        function saveSentInvitation(invitation) {
-            const invitations = getSentInvitations();
-            invitations.push(invitation);
-            localStorage.setItem('sent_invitations', JSON.stringify(invitations));
-        }
-
         function countUnreadMessages(groupId, messages, lastReadAt) {
             return messages.filter(msg => msg.created_at > lastReadAt).length;
         }
@@ -1028,10 +1007,6 @@
                 document.getElementById('keypackages-container').style.display = 'block';
                 await refreshKeyPackageList();
                 // await initializeWelcomeSubscription();
-
-                // Initialize Sent Invitations
-                document.getElementById('sent-invitations-container').style.display = 'block';
-                await refreshSentInvitations();
 
                 document.getElementById('buttons').style.display = 'block';
                 document.getElementById('status').innerHTML = '<div class="success">✓ Ready</div>';
@@ -2177,47 +2152,6 @@
             }).join('');
         }
 
-        // Refresh the Sent Invitations list display
-        async function refreshSentInvitations() {
-            const listDiv = document.getElementById('sent-invitations-list');
-            const invitations = getSentInvitations();
-
-            // Sort by timestamp descending (newest first)
-            invitations.sort((a, b) => b.timestamp - a.timestamp);
-
-            if (invitations.length === 0) {
-                listDiv.innerHTML = '<p style="color: #666; font-style: italic;">No invitations sent yet</p>';
-                return;
-            }
-
-            listDiv.innerHTML = invitations.map(inv => {
-                const timeAgo = formatTimeAgo(inv.timestamp);
-                const inviteeShort = inv.invitee_npub.substring(0, 16) + '...';
-                const kpEventShort = inv.keypackage_event_id.substring(0, 16) + '...';
-                const welcomeEventShort = inv.welcome_event_id ? inv.welcome_event_id.substring(0, 16) + '...' : 'N/A';
-
-                return `
-                    <div style="background: #f9f9f9; border: 1px solid #ddd; border-radius: 4px; padding: 15px; margin: 10px 0;">
-                        <div style="display: flex; justify-content: space-between; align-items: flex-start;">
-                            <div style="flex: 1;">
-                                <div style="font-weight: bold; margin-bottom: 4px;">👋 ${inviteeShort}</div>
-                                <div style="font-size: 0.85em; color: #666; margin-bottom: 4px;">
-                                    Group: ${inv.group_name}
-                                </div>
-                                <div style="font-size: 0.85em; color: #666; margin-bottom: 4px;">
-                                    Sent: ${timeAgo}
-                                </div>
-                                <div style="font-size: 0.75em; color: #999;">
-                                    KeyPackage: ${kpEventShort}<br>
-                                    Welcome: ${welcomeEventShort}
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                `;
-            }).join('');
-        }
-
         // Format timestamp as "X minutes ago"
         function formatTimeAgo(timestamp) {
             const now = Math.floor(Date.now() / 1000);
@@ -2884,19 +2818,11 @@
                 statusMessage.innerHTML = '<strong style="color: #28a745;">✅ Group created and member invited!</strong>';
                 closeButtonContainer.style.display = 'block';
 
-                // Save invitation records
-                if (result.invitations && result.invitations.length > 0) {
-                    result.invitations.forEach(invitation => {
-                        saveSentInvitation(invitation);
-                    });
-                }
-
                 statusDiv.innerHTML = `<div class="success">✅ Group created!</div>`;
 
                 // Close create group modal and refresh
                 closeCreateGroupModal();
                 await refreshGroups();
-                await refreshSentInvitations();
             } catch (err) {
                 console.error('Failed to create group:', err);
 
@@ -3158,23 +3084,7 @@
                 statusMessage.innerHTML = '<strong style="color: #28a745;">✅ Invitation completed successfully!</strong>';
                 closeButtonContainer.style.display = 'block';
 
-                // Save the invitation record
-                saveSentInvitation({
-                    invitee_npub: result.invitee_npub,
-                    invitee_pubkey: result.invitee_pubkey,
-                    keypackage_event_id: result.keypackages.selected_keypackage_id,
-                    welcome_event_id: result.welcome_event_id,
-                    group_id: result.group_id,
-                    group_name: result.group_name,
-                    timestamp: result.timestamp
-                });
-
                 statusDiv.innerHTML = `<div class="success">✅ Invite sent!</div>`;
-
-                // Refresh invitations list if on that page
-                if (typeof refreshSentInvitations === 'function') {
-                    await refreshSentInvitations();
-                }
 
                 // Close the invite input modal
                 closeInviteModal();
