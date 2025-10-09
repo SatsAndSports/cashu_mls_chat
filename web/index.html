@@ -1254,7 +1254,6 @@
                 document.getElementById('groups-status').textContent = 'Loading groups...';
 
                 const groupsJson = await get_groups();
-                console.log('  Received groups JSON:', groupsJson);
                 const groups = JSON.parse(groupsJson);
                 console.log(`  Parsed ${groups.length} group(s)`);
 
@@ -1276,27 +1275,22 @@
                         let unreadCount = 0;
 
                         // Check if group has any messages (using last_message_at instead of last_message_id)
-                        console.log(`Fetching preview for group ${group.name}, has last_message_at: ${!!group.last_message_at}`);
                         if (group.last_message_at) {
                             try {
                                 const messagesJson = await get_messages_for_group(group.id);
                                 const messages = JSON.parse(messagesJson);
-                                console.log(`  Group ${group.name} has ${messages.length} messages`);
 
                                 // Count unread messages
                                 const lastReadAt = getLastReadAt(group.id);
                                 unreadCount = countUnreadMessages(group.id, messages, lastReadAt);
-                                console.log(`  Group ${group.name} has ${unreadCount} unread messages (last read: ${lastReadAt})`);
 
                                 if (messages.length > 0) {
                                     // Get the last message (most recent)
                                     const lastMsg = messages[messages.length - 1];
                                     const content = lastMsg.content || '';
-                                    console.log(`  Last message content: "${content}"`);
                                     // Truncate to 50 chars and strip any special commands
                                     const truncated = content.length > 50 ? content.substring(0, 50) + '...' : content;
                                     messagePreview = truncated;
-                                    console.log(`  Preview set to: "${messagePreview}"`);
                                 }
                             } catch (err) {
                                 console.error('Failed to fetch message preview:', err);
