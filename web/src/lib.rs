@@ -227,6 +227,13 @@ pub fn get_npub() -> Result<String, JsValue> {
     Ok(keys.public_key().to_bech32().expect("bech32 encoding is infallible"))
 }
 
+/// Get the public key in hex format
+#[wasm_bindgen]
+pub fn get_pubkey_hex() -> Result<String, JsValue> {
+    let keys = get_keys()?;
+    Ok(keys.public_key().to_hex())
+}
+
 /// Clear all stored keys and MDK state (for testing, keeps wallet)
 #[wasm_bindgen]
 pub fn clear_keys() -> Result<(), JsValue> {

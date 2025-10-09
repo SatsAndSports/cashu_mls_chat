@@ -32,26 +32,26 @@ Then open http://localhost:4450 in your browser.
 
 The web client stores:
 - **Nostr keys** in localStorage (persistent across reloads)
-- **Wallet state** will use IndexedDB (coming soon)
+- **Wallet state** in localStorage (Cashu proofs and balances)
+- **MDK state** in localStorage (OpenMLS group state and metadata)
 
 ## Features
 
-Current:
 - ✓ Generate/load Nostr keys
-- ✓ Display npub
-- ✓ localStorage persistence for keys
-- ✓ Placeholder wallet (shows mint URL and 0 balance)
-
-Coming soon:
-- Real CDK Cashu wallet integration (needs WASM-compatible storage)
-- MLS group messaging
-- IndexedDB for wallet state
+- ✓ MLS encrypted group messaging
+- ✓ Multi-mint Cashu wallet
+- ✓ Invite members to groups
+- ✓ Send and receive e-cash tokens
+- ✓ Trusted mint management
+- ✓ Per-mint balance tracking
+- ✓ Real-time message updates
+- ✓ Mobile-responsive UI
 
 ## Known Issues / TODO
 
 ### MLS Commit Conflict Handling
 
-**Problem:** When multiple users perform epoch-changing operations simultaneously (e.g., both trying to add a member), only one commit succeeds and the other is rejected. Currently, neither the web nor egui app handles this gracefully.
+**Problem:** When multiple users perform epoch-changing operations simultaneously (e.g., both trying to add a member), only one commit succeeds and the other is rejected. Currently, the web client doesn't handle this gracefully.
 
 **Example scenario:**
 - Alice and Bob both try to add Carol at epoch 5
@@ -91,10 +91,3 @@ This is not critical for normal usage (commit conflicts are rare) but should be 
 - Would need to track ID history and subscribe to all historical IDs, or remove the `#h` filter
 
 **Recommendation:** Clarify whether `nostr_group_id` is intended to change. If yes, implement multi-ID subscription tracking. If no, mark it as immutable and remove the setter.
-
-## Notes
-
-The CDK wallet integration is currently a placeholder because:
-- SQLite doesn't compile to WASM (needs C stdlib)
-- Need to implement IndexedDB-backed storage for wallet proofs
-- Or use a simpler in-memory solution for the initial version

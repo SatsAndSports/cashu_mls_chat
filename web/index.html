@@ -675,6 +675,7 @@
             get_or_create_keys,
             generate_keys,
             get_npub,
+            get_pubkey_hex,
             clear_keys,
             init_wallet,
             get_balance,
@@ -816,6 +817,10 @@
                 wasm = await init();
                 log("WASM module loaded successfully");
                 await displayNpub();
+
+                // Get current user's pubkey for message styling
+                currentUserPubkey = await get_pubkey_hex();
+
                 await initializeWallet();
                 await initializeGroups();
                 document.getElementById('buttons').style.display = 'block';
@@ -1360,6 +1365,9 @@
         const tokenStore = new Map();
         let tokenIdCounter = 0;
 
+        // Store current user's pubkey for message styling
+        let currentUserPubkey = null;
+
         // Format message content, detecting and formatting Cashu tokens
         async function formatMessageContent(content) {
             // Detect cashu tokens (start with cashuA or cashuB)
@@ -1468,12 +1476,18 @@
                         const timestamp = new Date(msg.created_at * 1000).toLocaleTimeString();
                         const npub = msg.pubkey.substring(0, 16);
                         const formattedContent = await formatMessageContent(msg.content);
+
+                        // Check if this is the current user's message
+                        const isOwnMessage = msg.pubkey === currentUserPubkey;
+
                         return `
-                        <div data-message-id="${msg.id}" style="margin-bottom: 10px; padding: 8px; background: white; border-radius: 4px;">
-                            <div style="font-size: 0.85em; color: #666; margin-bottom: 4px;">
-                                <strong>${npub}...</strong> • ${timestamp}
+                        <div data-message-id="${msg.id}" style="margin-bottom: 10px; display: flex; justify-content: ${isOwnMessage ? 'flex-end' : 'flex-start'};">
+                            <div style="max-width: 70%; padding: 8px; background: ${isOwnMessage ? '#dcf8c6' : 'white'}; border-radius: 8px; ${isOwnMessage ? 'border-bottom-right-radius: 2px;' : 'border-bottom-left-radius: 2px;'}">
+                                <div style="font-size: 0.85em; color: #666; margin-bottom: 4px;">
+                                    <strong>${npub}...</strong> • ${timestamp}
+                                </div>
+                                <div>${formattedContent}</div>
                             </div>
-                            <div>${formattedContent}</div>
                         </div>`;
                     }));
 
@@ -1513,12 +1527,17 @@
             const npub = message.pubkey.substring(0, 16);
             const formattedContent = await formatMessageContent(message.content);
 
+            // Check if this is the current user's message
+            const isOwnMessage = message.pubkey === currentUserPubkey;
+
             const messageHtml = `
-            <div data-message-id="${message.id}" style="margin-bottom: 10px; padding: 8px; background: white; border-radius: 4px;">
-                <div style="font-size: 0.85em; color: #666; margin-bottom: 4px;">
-                    <strong>${npub}...</strong> • ${timestamp}
+            <div data-message-id="${message.id}" style="margin-bottom: 10px; display: flex; justify-content: ${isOwnMessage ? 'flex-end' : 'flex-start'};">
+                <div style="max-width: 70%; padding: 8px; background: ${isOwnMessage ? '#dcf8c6' : 'white'}; border-radius: 8px; ${isOwnMessage ? 'border-bottom-right-radius: 2px;' : 'border-bottom-left-radius: 2px;'}">
+                    <div style="font-size: 0.85em; color: #666; margin-bottom: 4px;">
+                        <strong>${npub}...</strong> • ${timestamp}
+                    </div>
+                    <div>${formattedContent}</div>
                 </div>
-                <div>${formattedContent}</div>
             </div>`;
 
             chatDiv.innerHTML += messageHtml;
