@@ -1617,39 +1617,73 @@ pub fn create_group_with_members(name: String, description: String, member_npubs
             // Publish Welcome messages to each invited member
             log(&format!("Publishing {} Welcome message(s)...", group_result.welcome_rumors.len()));
 
+            let mut invitations = Vec::new();
+
             for mut welcome_unsigned in group_result.welcome_rumors {
                 // Extract recipient pubkey from the e tag (KeyPackage reference)
                 // The Welcome references a KeyPackage via e tag, and we need to add a p tag for that KeyPackage's author
-                if let Some(kp_event_id_tag) = welcome_unsigned.tags.iter().find(|t| t.kind().as_str() == "e") {
-                    if let Some(kp_event_id) = kp_event_id_tag.content() {
-                        // Find the KeyPackage event to get its author (the invitee's pubkey)
-                        if let Some(kp_event) = kp_events_for_tags.iter().find(|e| e.id.to_hex() == kp_event_id) {
-                            // Add p tag with invitee's pubkey
-                            welcome_unsigned.tags.push(nostr::Tag::public_key(kp_event.pubkey));
-                            log(&format!("  Added p tag for invitee: {}", kp_event.pubkey.to_hex()));
 
-                            // Clear the ID so it gets recalculated when signing
-                            welcome_unsigned.id = None;
+                // First, extract the kp_event_id as an owned String to avoid borrowing issues
+                let kp_event_id_opt = welcome_unsigned.tags.iter()
+                    .find(|t| t.kind().as_str() == "e")
+                    .and_then(|tag| tag.content().map(|s| s.to_string()));
+
+                if let Some(kp_event_id) = kp_event_id_opt {
+                    // Find the KeyPackage event to get its author (the invitee's pubkey)
+                    if let Some(kp_event) = kp_events_for_tags.iter().find(|e| e.id.to_hex() == kp_event_id) {
+                        let invitee_pubkey = kp_event.pubkey;
+                        let invitee_pubkey_hex = invitee_pubkey.to_hex();
+
+                        // Find the corresponding npub
+                        let invitee_npub = member_npubs.iter()
+                            .find(|npub| {
+                                if let Ok(pk) = nostr::PublicKey::from_bech32(npub) {
+                                    pk == invitee_pubkey
+                                } else {
+                                    false
+                                }
+                            })
+                            .cloned()
+                            .unwrap_or_else(|| invitee_pubkey.to_bech32().unwrap());
+
+                        // Add p tag with invitee's pubkey
+                        welcome_unsigned.tags.push(nostr::Tag::public_key(invitee_pubkey));
+                        log(&format!("  Added p tag for invitee: {}", invitee_pubkey_hex));
+
+                        // Clear the ID so it gets recalculated when signing
+                        welcome_unsigned.id = None;
+
+                        // Ensure ID is set before signing
+                        welcome_unsigned.ensure_id();
+
+                        // Sign the UnsignedEvent
+                        let welcome_event = welcome_unsigned.sign(&keys).await
+                            .map_err(|e| JsValue::from_str(&format!("Failed to sign Welcome: {}", e)))?;
+
+                        let welcome_event_id = welcome_event.id.to_hex();
+
+                        let send_result = client.send_event(&welcome_event).await
+                            .map_err(|e| JsValue::from_str(&format!("Failed to send Welcome: {}", e)))?;
+
+                        log("Publishing Welcome message:");
+                        for relay_url in send_result.success.iter() {
+                            log(&format!("  ✓ {} accepted Welcome", relay_url));
                         }
+                        for (relay_url, error) in send_result.failed.iter() {
+                            log(&format!("  ✗ {} rejected Welcome: {}", relay_url, error));
+                        }
+
+                        // Save invitation details
+                        invitations.push(serde_json::json!({
+                            "invitee_npub": invitee_npub,
+                            "invitee_pubkey": invitee_pubkey_hex,
+                            "keypackage_event_id": kp_event_id,
+                            "welcome_event_id": welcome_event_id,
+                            "group_id": group_id.clone(),
+                            "group_name": name.clone(),
+                            "timestamp": nostr::Timestamp::now().as_u64(),
+                        }));
                     }
-                }
-
-                // Ensure ID is set before signing
-                welcome_unsigned.ensure_id();
-
-                // Sign the UnsignedEvent
-                let welcome_event = welcome_unsigned.sign(&keys).await
-                    .map_err(|e| JsValue::from_str(&format!("Failed to sign Welcome: {}", e)))?;
-
-                let send_result = client.send_event(&welcome_event).await
-                    .map_err(|e| JsValue::from_str(&format!("Failed to send Welcome: {}", e)))?;
-
-                log("Publishing Welcome message:");
-                for relay_url in send_result.success.iter() {
-                    log(&format!("  ✓ {} accepted Welcome", relay_url));
-                }
-                for (relay_url, error) in send_result.failed.iter() {
-                    log(&format!("  ✗ {} rejected Welcome: {}", relay_url, error));
                 }
             }
 
@@ -1658,7 +1692,13 @@ pub fn create_group_with_members(name: String, description: String, member_npubs
             // Disconnect
             let _ = client.disconnect().await;
 
-            Ok::<String, JsValue>(group_id)
+            // Return group ID and invitations
+            let result = serde_json::json!({
+                "group_id": group_id,
+                "invitations": invitations,
+            });
+
+            Ok::<String, JsValue>(result.to_string())
         }
         .await;
 
@@ -1749,6 +1789,7 @@ pub fn invite_member_to_group(group_id_hex: String, member_npub: String) -> js_s
                 .map_err(|e| JsValue::from_str(&format!("Failed to publish evolution: {}", e)))?;
 
             // Step 3: Publish Welcome message
+            let mut welcome_event_id = String::new();
             if let Some(welcome_rumors) = invite_result.welcome_rumors {
                 log(&format!("Publishing Welcome message to {}...", &member_npub[..16]));
 
@@ -1765,6 +1806,9 @@ pub fn invite_member_to_group(group_id_hex: String, member_npub: String) -> js_s
 
                     let welcome_event = welcome_unsigned.sign(&keys).await
                         .map_err(|e| JsValue::from_str(&format!("Failed to sign Welcome: {}", e)))?;
+
+                    // Store the Welcome event ID
+                    welcome_event_id = welcome_event.id.to_hex();
 
                     let send_result = client.send_event(&welcome_event).await
                         .map_err(|e| JsValue::from_str(&format!("Failed to send Welcome: {}", e)))?;
@@ -1843,7 +1887,25 @@ pub fn invite_member_to_group(group_id_hex: String, member_npub: String) -> js_s
             // Disconnect
             let _ = client.disconnect().await;
 
-            Ok::<JsValue, JsValue>(JsValue::from_str("success"))
+            // Return invitation details for tracking
+            let group_name = if group.name.is_empty() {
+                "Unnamed Group".to_string()
+            } else {
+                group.name.clone()
+            };
+
+            let result = serde_json::json!({
+                "success": true,
+                "invitee_npub": member_npub,
+                "invitee_pubkey": member_pubkey.to_hex(),
+                "keypackage_event_id": newest.id.to_hex(),
+                "welcome_event_id": welcome_event_id,
+                "group_id": group_id_hex,
+                "group_name": group_name,
+                "timestamp": nostr::Timestamp::now().as_u64(),
+            });
+
+            Ok::<JsValue, JsValue>(JsValue::from_str(&result.to_string()))
         }
         .await;
 
