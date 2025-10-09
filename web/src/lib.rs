@@ -863,11 +863,17 @@ pub fn get_groups() -> js_sys::Promise {
 
             // Convert to JSON array with member count and admin info
             let groups_json: Vec<_> = groups.iter().map(|g| {
-                // Get member count
-                let member_count = mdk.get_members(&g.mls_group_id)
+                // Get members
+                let members = mdk.get_members(&g.mls_group_id)
                     .ok()
-                    .map(|members| members.len())
-                    .unwrap_or(0);
+                    .unwrap_or_default();
+
+                let member_count = members.len();
+
+                // Convert member pubkeys to npubs
+                let member_npubs: Vec<String> = members.iter()
+                    .filter_map(|pk| pk.to_bech32().ok())
+                    .collect();
 
                 // Check if current user is an admin
                 let is_admin = g.admin_pubkeys.contains(&current_user_pubkey);
@@ -884,6 +890,7 @@ pub fn get_groups() -> js_sys::Promise {
                     "image_hash": g.image_hash.map(|h| hex::encode(h)),
                     "last_message_at": g.last_message_at.map(|t| t.as_u64()),
                     "member_count": member_count,
+                    "member_npubs": member_npubs,
                     "is_admin": is_admin,
                     "admin_npubs": admin_npubs,
                 })
@@ -1486,23 +1493,8 @@ pub fn subscribe_to_welcome_messages(callback: js_sys::Function) -> js_sys::Prom
                                             Ok(_) => {
                                                 log(&format!("✅ Successfully joined group: {}", group_name));
 
-                                                // Check if we're an admin in this group
-                                                let is_admin = if let Ok(Some(group)) = mdk.get_group(&welcome.mls_group_id) {
-                                                    if let Ok(keys) = get_keys() {
-                                                        group.admin_pubkeys.contains(&keys.public_key())
-                                                    } else {
-                                                        false
-                                                    }
-                                                } else {
-                                                    false
-                                                };
-
-                                                // Send "[joined group]" or "[joined group as an admin]" message
-                                                let join_message = if is_admin {
-                                                    "[joined group as an admin]"
-                                                } else {
-                                                    "[joined group]"
-                                                };
+                                                // Send "[joined group]" message
+                                                let join_message = "[joined group]";
 
                                                 log(&format!("  Sending join message: {}", join_message));
                                                 if let Ok(keys) = get_keys() {
@@ -2170,6 +2162,114 @@ pub fn invite_member_to_group(group_id_hex: String, member_npub: String, is_admi
         .await;
 
         result
+    })
+}
+
+/// Remove a member from a group (or leave the group if removing yourself)
+/// Returns a Promise that resolves when the removal is complete
+#[wasm_bindgen]
+pub fn remove_member_from_group(group_id_hex: String, member_npub: String) -> js_sys::Promise {
+    future_to_promise(async move {
+        let result = async {
+            log(&format!("🚪 Removing {} from group {}...", &member_npub[..16], &group_id_hex[..16]));
+
+            // Parse npub to get public key
+            let member_pubkey = nostr::PublicKey::from_bech32(&member_npub)
+                .map_err(|e| JsValue::from_str(&format!("Invalid npub: {}", e)))?;
+
+            // Parse group ID
+            let group_id_bytes = hex::decode(&group_id_hex)
+                .map_err(|e| JsValue::from_str(&format!("Invalid group ID: {}", e)))?;
+            let group_id = mdk_core::prelude::GroupId::from_slice(&group_id_bytes);
+
+            // Get our keys
+            let keys = get_keys()?;
+            let our_pubkey = keys.public_key();
+
+            // Create MDK
+            let mdk = create_mdk().await?;
+
+            // Get group data to check admins and member
+            let group = mdk.get_group(&group_id)
+                .map_err(|e| JsValue::from_str(&format!("Failed to get group: {}", e)))?
+                .ok_or_else(|| JsValue::from_str("Group not found"))?;
+
+            let is_self_removal = member_pubkey == our_pubkey;
+
+            // If removing someone else, check we're an admin
+            if !is_self_removal && !group.admin_pubkeys.contains(&our_pubkey) {
+                return Err(JsValue::from_str("Only admins can remove other members"));
+            }
+
+            // Check if removing the last admin (only if removing someone else)
+            if !is_self_removal && group.admin_pubkeys.contains(&member_pubkey) {
+                // Count remaining admins after removal
+                let remaining_admins = group.admin_pubkeys.iter()
+                    .filter(|&pk| pk != &member_pubkey)
+                    .count();
+
+                if remaining_admins == 0 {
+                    return Err(JsValue::from_str("Cannot remove the last admin from the group"));
+                }
+            }
+
+            let client = create_connected_client().await?;
+
+            // Remove the member (use leave_group for self, remove_members for others)
+            // Note: We don't send a message beforehand because it would create epoch conflicts
+            let remove_result = if is_self_removal {
+                log("Leaving group...");
+                mdk.leave_group(&group_id)
+                    .map_err(|e| JsValue::from_str(&format!("Failed to leave group: {}", e)))?
+            } else {
+                log("Removing member from group...");
+                mdk.remove_members(&group_id, &[member_pubkey])
+                    .map_err(|e| JsValue::from_str(&format!("Failed to remove member: {}", e)))?
+            };
+
+            // Publish the evolution event FIRST so others can process it
+            client.send_event(&remove_result.evolution_event).await
+                .map_err(|e| JsValue::from_str(&format!("Failed to publish removal evolution: {}", e)))?;
+
+            // Then merge our local state
+            mdk.merge_pending_commit(&group_id)
+                .map_err(|e| JsValue::from_str(&format!("Failed to merge removal commit: {}", e)))?;
+
+            // Explicitly save after removing member
+            let storage = get_or_create_storage().await?;
+            storage.inner().save_snapshot()
+                .map_err(|e| JsValue::from_str(&format!("Failed to save after remove_member: {:?}", e)))?;
+            log("✓ State saved to storage");
+
+            // Disconnect
+            let _ = client.disconnect().await;
+
+            log(&format!("✅ {} removed from group", &member_npub[..16]));
+
+            // Return result as JSON
+            #[derive(Serialize)]
+            struct RemovalResult {
+                success: bool,
+                group_id: String,
+                removed_member: String,
+                is_self_removal: bool,
+            }
+
+            let result = RemovalResult {
+                success: true,
+                group_id: group_id_hex,
+                removed_member: member_npub,
+                is_self_removal,
+            };
+
+            let json = serde_json::to_string(&result)
+                .map_err(|e| JsValue::from_str(&format!("JSON serialization error: {}", e)))?;
+
+            Ok::<String, JsValue>(json)
+        }
+        .await;
+
+        result.map(|json| JsValue::from_str(&json))
     })
 }
 

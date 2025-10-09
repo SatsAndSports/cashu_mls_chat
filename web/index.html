@@ -385,6 +385,7 @@
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
                     <h2 id="chat-group-name">💬 Chat</h2>
                     <div style="display: flex; gap: 10px;">
+                        <button onclick="showMembersModal()">👥 Members</button>
                         <button id="invite-member-btn" onclick="showInviteModal()">➕ Invite Member</button>
                         <button onclick="closeChat()">← Back to Groups</button>
                     </div>
@@ -501,6 +502,17 @@
             <div style="display: flex; gap: 10px; margin-top: 20px;">
                 <button onclick="inviteMember()" style="flex: 1; padding: 12px; background: #0066cc; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 1em;">Send Invite</button>
                 <button onclick="closeInviteModal()" style="padding: 12px 30px; background: #ccc; border: none; border-radius: 4px; cursor: pointer;">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Members Modal -->
+    <div id="members-modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000;">
+        <div style="background: white; max-width: 600px; margin: 100px auto; padding: 30px; border-radius: 8px; max-height: 80vh; overflow-y: auto;">
+            <h2>👥 Group Members</h2>
+            <div id="members-list" style="margin: 20px 0;"></div>
+            <div style="display: flex; gap: 10px; margin-top: 20px;">
+                <button onclick="closeMembersModal()" style="flex: 1; padding: 12px 30px; background: #ccc; border: none; border-radius: 4px; cursor: pointer;">Close</button>
             </div>
         </div>
     </div>
@@ -854,6 +866,7 @@
             fetch_keypackages_for_npub,
             fetch_deletions_for_npub,
             invite_member_to_group,
+            remove_member_from_group,
             send_message_to_group,
             get_messages_for_group,
             subscribe_to_group_messages,
@@ -2915,6 +2928,95 @@
         window.closeInviteDetailsModal = function() {
             document.getElementById('invite-details-modal').style.display = 'none';
         };
+
+        // Show members modal
+        window.showMembersModal = async function() {
+            try {
+                const groupsJson = await get_groups();
+                const groups = JSON.parse(groupsJson);
+                const group = groups.find(g => g.id === currentChatGroupId);
+
+                if (!group) {
+                    alert('Group not found');
+                    return;
+                }
+
+                const ourPubkeyHex = await get_pubkey_hex();
+                const isAdmin = group.admin_npubs.some(npub => {
+                    // Convert npub to hex and compare
+                    try {
+                        const pk = window.NostrTools?.nip19?.decode(npub)?.data;
+                        return pk === ourPubkeyHex;
+                    } catch {
+                        return false;
+                    }
+                });
+
+                // Build members list
+                let html = '<div style="max-height: 400px; overflow-y: auto;">';
+
+                for (const memberNpub of group.member_npubs) {
+                    const isAdminMember = group.admin_npubs.includes(memberNpub);
+                    const isUs = memberNpub === await get_npub();
+
+                    html += `
+                        <div style="display: flex; justify-content: space-between; align-items: center; padding: 12px; border-bottom: 1px solid #eee;">
+                            <div style="flex: 1; overflow: hidden;">
+                                <div style="font-family: monospace; font-size: 0.9em; color: #333;">
+                                    ${memberNpub.substring(0, 16)}...${memberNpub.substring(memberNpub.length - 8)}
+                                </div>
+                                <div style="font-size: 0.8em; color: #666; margin-top: 4px;">
+                                    ${isAdminMember ? '👑 Admin' : 'Member'}
+                                    ${isUs ? ' (You)' : ''}
+                                </div>
+                            </div>
+                            ${!isUs && isAdmin ? `
+                                <button onclick="removeMember('${memberNpub}')"
+                                    style="padding: 6px 12px; background: #dc3545; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9em;">
+                                    Remove
+                                </button>
+                            ` : ''}
+                        </div>
+                    `;
+                }
+
+                html += '</div>';
+                document.getElementById('members-list').innerHTML = html;
+                document.getElementById('members-modal').style.display = 'block';
+            } catch (err) {
+                console.error('Failed to show members:', err);
+                alert('Failed to load members: ' + err);
+            }
+        };
+
+        window.closeMembersModal = function() {
+            document.getElementById('members-modal').style.display = 'none';
+        };
+
+        window.removeMember = async function(memberNpub) {
+            if (!confirm(`Remove ${memberNpub.substring(0, 16)}... from the group?`)) {
+                return;
+            }
+
+            try {
+                console.log(`Removing member: ${memberNpub}`);
+                const resultJson = await remove_member_from_group(currentChatGroupId, memberNpub);
+                const result = JSON.parse(resultJson);
+
+                console.log('Member removed:', result);
+                showToast(`✅ Member removed`);
+
+                // Close members modal and refresh
+                closeMembersModal();
+                await refreshGroups();
+            } catch (err) {
+                console.error('Failed to remove member:', err);
+                alert('Failed to remove member: ' + err);
+            }
+        };
+
+        // Leaving groups disabled for now due to MLS sync issues
+        // window.leaveGroup = async function() { ... };
 
         window.inviteMember = async function() {
             const npub = document.getElementById('invite-member-npub').value.trim();
