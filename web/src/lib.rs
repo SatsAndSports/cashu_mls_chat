@@ -6,7 +6,7 @@ use web_sys::{window, Storage};
 use std::sync::Arc;
 use std::str::FromStr;
 use std::time::Duration;
-use serde::Serialize;
+use serde::{Serialize, Deserialize};
 use once_cell::sync::Lazy;
 use tokio::sync::Mutex as TokioMutex;
 
@@ -1486,6 +1486,51 @@ pub fn subscribe_to_welcome_messages(callback: js_sys::Function) -> js_sys::Prom
                                             Ok(_) => {
                                                 log(&format!("✅ Successfully joined group: {}", group_name));
 
+                                                // Check if we're an admin in this group
+                                                let is_admin = if let Ok(Some(group)) = mdk.get_group(&welcome.mls_group_id) {
+                                                    if let Ok(keys) = get_keys() {
+                                                        group.admin_pubkeys.contains(&keys.public_key())
+                                                    } else {
+                                                        false
+                                                    }
+                                                } else {
+                                                    false
+                                                };
+
+                                                // Send "[joined group]" or "[joined group as an admin]" message
+                                                let join_message = if is_admin {
+                                                    "[joined group as an admin]"
+                                                } else {
+                                                    "[joined group]"
+                                                };
+
+                                                log(&format!("  Sending join message: {}", join_message));
+                                                if let Ok(keys) = get_keys() {
+                                                    let rumor = nostr::UnsignedEvent {
+                                                        id: None,
+                                                        pubkey: keys.public_key(),
+                                                        created_at: nostr::Timestamp::now(),
+                                                        kind: Kind::GiftWrap,
+                                                        tags: nostr::Tags::new(),
+                                                        content: join_message.to_string(),
+                                                    };
+
+                                                    match mdk.create_message(&welcome.mls_group_id, rumor) {
+                                                        Ok(message_event) => {
+                                                            if let Err(e) = mdk.merge_pending_commit(&welcome.mls_group_id) {
+                                                                log(&format!("  ⚠️ Failed to merge join message commit: {}", e));
+                                                            } else if let Ok(client) = create_connected_client().await {
+                                                                match client.send_event(&message_event).await {
+                                                                    Ok(_) => log("  ✓ Join message sent"),
+                                                                    Err(e) => log(&format!("  ⚠️ Failed to send join message: {}", e)),
+                                                                }
+                                                                let _ = client.disconnect().await;
+                                                            }
+                                                        }
+                                                        Err(e) => log(&format!("  ⚠️ Failed to create join message: {}", e)),
+                                                    }
+                                                }
+
                                                 // Explicitly save after accepting Welcome
                                                 if let Ok(storage) = get_or_create_storage().await {
                                                     if let Err(e) = storage.inner().save_snapshot() {
@@ -1584,30 +1629,39 @@ pub fn create_group_with_members(name: String, description: String, member_npubs
         let result = async {
             log(&format!("📝 Creating group: {}", name));
 
-            // Parse member npubs
-            let member_npubs: Vec<String> = serde_json::from_str(&member_npubs_json)
-                .map_err(|e| JsValue::from_str(&format!("Invalid npubs JSON: {}", e)))?;
+            // Parse member data (array of {npub: string, is_admin: bool})
+            #[derive(Deserialize)]
+            struct MemberData {
+                npub: String,
+                is_admin: bool,
+            }
+
+            let members: Vec<MemberData> = serde_json::from_str(&member_npubs_json)
+                .map_err(|e| JsValue::from_str(&format!("Invalid members JSON: {}", e)))?;
 
             // Get our keys
             let keys = get_keys()?;
             let our_pubkey = keys.public_key();
 
             // Fetch KeyPackages for each member
-            log(&format!("Fetching KeyPackages for {} member(s)...", member_npubs.len()));
+            log(&format!("Fetching KeyPackages for {} member(s)...", members.len()));
 
             let client = create_connected_client().await?;
 
             let mut key_package_events = Vec::new();
             let mut admin_pubkeys = vec![our_pubkey]; // Creator is always admin
 
-            for npub in &member_npubs {
-                log(&format!("  Fetching KeyPackage for {}...", &npub[..16]));
+            for member in &members {
+                log(&format!("  Fetching KeyPackage for {}...", &member.npub[..16]));
 
                 // Parse npub to get public key
-                let pubkey = nostr::PublicKey::from_bech32(npub)
-                    .map_err(|e| JsValue::from_str(&format!("Invalid npub {}: {}", npub, e)))?;
+                let pubkey = nostr::PublicKey::from_bech32(&member.npub)
+                    .map_err(|e| JsValue::from_str(&format!("Invalid npub {}: {}", member.npub, e)))?;
 
-                admin_pubkeys.push(pubkey);
+                // Add to admin list if flagged as admin
+                if member.is_admin {
+                    admin_pubkeys.push(pubkey);
+                }
 
                 // Query for their most recent KeyPackage (kind 443)
                 let filter = nostr::Filter::new()
@@ -1616,10 +1670,10 @@ pub fn create_group_with_members(name: String, description: String, member_npubs
                     .limit(10);  // Get last 10, we'll pick the newest non-deleted
 
                 let events = client.fetch_events(filter, Duration::from_secs(10)).await
-                    .map_err(|e| JsValue::from_str(&format!("Failed to fetch KeyPackages for {}: {}", npub, e)))?;
+                    .map_err(|e| JsValue::from_str(&format!("Failed to fetch KeyPackages for {}: {}", member.npub, e)))?;
 
                 if events.is_empty() {
-                    return Err(JsValue::from_str(&format!("No KeyPackage found for {}", npub)));
+                    return Err(JsValue::from_str(&format!("No KeyPackage found for {}", member.npub)));
                 }
 
                 // Fetch deletion events (Kind 5) from this author to filter out deleted KeyPackages
@@ -1654,7 +1708,7 @@ pub fn create_group_with_members(name: String, description: String, member_npubs
                     .collect();
 
                 if available_kps.is_empty() {
-                    return Err(JsValue::from_str(&format!("No available (non-deleted) KeyPackage found for {}", npub)));
+                    return Err(JsValue::from_str(&format!("No available (non-deleted) KeyPackage found for {}", member.npub)));
                 }
 
                 let newest = available_kps.iter()
@@ -1718,15 +1772,15 @@ pub fn create_group_with_members(name: String, description: String, member_npubs
                         let invitee_pubkey_hex = invitee_pubkey.to_hex();
 
                         // Find the corresponding npub
-                        let invitee_npub = member_npubs.iter()
-                            .find(|npub| {
-                                if let Ok(pk) = nostr::PublicKey::from_bech32(npub) {
+                        let invitee_npub = members.iter()
+                            .find(|member| {
+                                if let Ok(pk) = nostr::PublicKey::from_bech32(&member.npub) {
                                     pk == invitee_pubkey
                                 } else {
                                     false
                                 }
                             })
-                            .cloned()
+                            .map(|m| m.npub.clone())
                             .unwrap_or_else(|| invitee_pubkey.to_bech32().unwrap());
 
                         // Add p tag with invitee's pubkey
@@ -1885,10 +1939,11 @@ pub fn fetch_deletions_for_npub(member_npub: String) -> js_sys::Promise {
 /// Invite a member to an existing group by their npub
 /// Returns a Promise that resolves when the invite is sent
 #[wasm_bindgen]
-pub fn invite_member_to_group(group_id_hex: String, member_npub: String) -> js_sys::Promise {
+pub fn invite_member_to_group(group_id_hex: String, member_npub: String, is_admin: bool) -> js_sys::Promise {
     future_to_promise(async move {
         let result = async {
-            log(&format!("👋 Inviting {} to group {}", &member_npub[..16], &group_id_hex[..16]));
+            let admin_status = if is_admin { " as admin" } else { "" };
+            log(&format!("👋 Inviting {} to group {}{}", &member_npub[..16], &group_id_hex[..16], admin_status));
 
             // Parse npub to get public key
             let member_pubkey = nostr::PublicKey::from_bech32(&member_npub)
@@ -1962,31 +2017,7 @@ pub fn invite_member_to_group(group_id_hex: String, member_npub: String) -> js_s
             // Create MDK
             let mdk = create_mdk().await?;
 
-            // Step 1: Send "Inviting..." message to existing members (before adding new member)
-            log(&format!("Notifying existing members about invitation..."));
-            let inviting_message = format!("Inviting {} to the group...", &member_npub);
-
-            let rumor = nostr::UnsignedEvent {
-                id: None,
-                pubkey: keys.public_key(),
-                created_at: nostr::Timestamp::now(),
-                kind: Kind::GiftWrap,
-                tags: nostr::Tags::new(),
-                content: inviting_message,
-            };
-
-            let message_event = mdk.create_message(&group_id, rumor)
-                .map_err(|e| JsValue::from_str(&format!("Failed to create 'inviting' message: {}", e)))?;
-
-            mdk.merge_pending_commit(&group_id)
-                .map_err(|e| JsValue::from_str(&format!("Failed to merge 'inviting' message commit: {}", e)))?;
-
-            client.send_event(&message_event).await
-                .map_err(|e| JsValue::from_str(&format!("Failed to send 'inviting' message: {}", e)))?;
-
-            log("✅ Existing members notified");
-
-            // Step 2: Add member to group
+            // Step 1: Add member to group
             log("Adding member to group...");
             let invite_result = mdk.add_members(&group_id, &[(**newest).clone()])
                 .map_err(|e| JsValue::from_str(&format!("Failed to add member: {}", e)))?;
@@ -2033,59 +2064,39 @@ pub fn invite_member_to_group(group_id_hex: String, member_npub: String) -> js_s
                 log(&format!("✅ Welcome sent to {}!", &member_npub[..16]));
             }
 
-            // Step 4: Promote new member to admin
-            log("Adding new member as admin...");
+            // Step 3: Promote new member to admin (if requested)
+            if is_admin {
+                log("Adding new member as admin...");
 
-            // Get current group data
-            let group = mdk.get_group(&group_id)
-                .map_err(|e| JsValue::from_str(&format!("Failed to get group: {}", e)))?
-                .ok_or_else(|| JsValue::from_str("Group not found"))?;
+                // Get current group data
+                let group = mdk.get_group(&group_id)
+                    .map_err(|e| JsValue::from_str(&format!("Failed to get group: {}", e)))?
+                    .ok_or_else(|| JsValue::from_str("Group not found"))?;
 
-            // Add the new member to admins
-            let mut new_admins: Vec<nostr::PublicKey> = group.admin_pubkeys.into_iter().collect();
-            new_admins.push(member_pubkey);
+                // Add the new member to admins
+                let mut new_admins: Vec<nostr::PublicKey> = group.admin_pubkeys.into_iter().collect();
+                new_admins.push(member_pubkey);
 
-            // Update group data with new admin list
-            use mdk_core::prelude::NostrGroupDataUpdate;
-            let update = NostrGroupDataUpdate {
-                admins: Some(new_admins),
-                ..Default::default()
-            };
+                // Update group data with new admin list
+                use mdk_core::prelude::NostrGroupDataUpdate;
+                let update = NostrGroupDataUpdate {
+                    admins: Some(new_admins),
+                    ..Default::default()
+                };
 
-            let update_result = mdk.update_group_data(&group_id, update)
-                .map_err(|e| JsValue::from_str(&format!("Failed to update admins: {}", e)))?;
+                let update_result = mdk.update_group_data(&group_id, update)
+                    .map_err(|e| JsValue::from_str(&format!("Failed to update admins: {}", e)))?;
 
-            // Merge the update commit BEFORE publishing
-            mdk.merge_pending_commit(&group_id)
-                .map_err(|e| JsValue::from_str(&format!("Failed to merge admin update: {}", e)))?;
+                // Merge the update commit BEFORE publishing
+                mdk.merge_pending_commit(&group_id)
+                    .map_err(|e| JsValue::from_str(&format!("Failed to merge admin update: {}", e)))?;
 
-            // Publish the update evolution event
-            client.send_event(&update_result.evolution_event).await
-                .map_err(|e| JsValue::from_str(&format!("Failed to publish admin update: {}", e)))?;
+                // Publish the update evolution event
+                client.send_event(&update_result.evolution_event).await
+                    .map_err(|e| JsValue::from_str(&format!("Failed to publish admin update: {}", e)))?;
 
-            log("✅ Member added as admin!");
-
-            // Step 5: Send final confirmation message to everyone (including new member)
-            log("Sending confirmation to all members...");
-            let confirmation_message = format!("{} joined the group and was promoted to admin", &member_npub);
-
-            // Create message rumor
-            let rumor = nostr::UnsignedEvent {
-                id: None,
-                pubkey: keys.public_key(),
-                created_at: nostr::Timestamp::now(),
-                kind: Kind::GiftWrap,
-                tags: nostr::Tags::new(),
-                content: confirmation_message,
-            };
-
-            // Create encrypted message
-            let message_event = mdk.create_message(&group_id, rumor)
-                .map_err(|e| JsValue::from_str(&format!("Failed to create confirmation message: {}", e)))?;
-
-            // Merge pending commit BEFORE publishing
-            mdk.merge_pending_commit(&group_id)
-                .map_err(|e| JsValue::from_str(&format!("Failed to merge confirmation commit: {}", e)))?;
+                log("✅ Member added as admin!");
+            }
 
             // Explicitly save after inviting member (critical operation)
             let storage = get_or_create_storage().await?;
@@ -2093,20 +2104,21 @@ pub fn invite_member_to_group(group_id_hex: String, member_npub: String) -> js_s
                 .map_err(|e| JsValue::from_str(&format!("Failed to save after invite_member: {:?}", e)))?;
             log("✓ State saved to storage");
 
-            // Publish confirmation message
-            client.send_event(&message_event).await
-                .map_err(|e| JsValue::from_str(&format!("Failed to send confirmation: {}", e)))?;
+            log("✅ Invitation complete!");
 
-            log("✅ Confirmation sent to all members!");
+            // Get group info for return value
+            let group_data = mdk.get_group(&group_id)
+                .map_err(|e| JsValue::from_str(&format!("Failed to get group: {}", e)))?
+                .ok_or_else(|| JsValue::from_str("Group not found"))?;
 
             // Disconnect
             let _ = client.disconnect().await;
 
             // Return detailed invitation information
-            let group_name = if group.name.is_empty() {
+            let group_name = if group_data.name.is_empty() {
                 "Unnamed Group".to_string()
             } else {
-                group.name.clone()
+                group_data.name.clone()
             };
 
             // Build detailed keypackage info

@@ -304,7 +304,10 @@
                 <div id="status">Loading WASM module...</div>
                 <div id="npub-container" style="display: none;">
                     <p><strong>Your npub:</strong></p>
-                    <div class="npub" id="npub"></div>
+                    <div style="display: flex; align-items: center; gap: 10px;">
+                        <div class="npub" id="npub" style="flex: 1;"></div>
+                        <button onclick="copyNpub()" style="padding: 8px 12px; background: #f0f0f0; border: 1px solid #ccc; border-radius: 4px; cursor: pointer; font-size: 0.9em;" title="Copy npub">📋</button>
+                    </div>
                 </div>
                 <div id="buttons" style="display: none;">
                     <button onclick="showResetIdentityModal()" style="background: #dc3545;">⚠️ Replace Identity with New Random Keys</button>
@@ -468,6 +471,10 @@
                 <label style="display: block; margin-bottom: 5px; font-weight: bold;">First member to invite:</label>
                 <input type="text" id="create-group-first-member" placeholder="npub1..." style="width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 4px; font-family: monospace; font-size: 0.9em;">
                 <p style="font-size: 0.9em; color: #666; margin-top: 5px;">Groups require you and at least 1 other member. You can invite more people later.</p>
+                <label style="display: flex; align-items: center; margin-top: 10px; cursor: pointer;">
+                    <input type="checkbox" id="create-group-first-member-admin" style="margin-right: 8px;">
+                    <span>Set as admin</span>
+                </label>
             </div>
             <div id="create-group-status" style="margin: 20px 0; color: #0066cc;"></div>
             <div style="display: flex; gap: 10px; margin-top: 20px;">
@@ -485,6 +492,10 @@
                 <label style="display: block; margin-bottom: 5px; font-weight: bold;">Member's npub:</label>
                 <input type="text" id="invite-member-npub" placeholder="npub1abc..." style="width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 4px; font-family: monospace; font-size: 0.9em;">
                 <p style="font-size: 0.9em; color: #666; margin-top: 5px;">Enter the npub of the person you want to invite</p>
+                <label style="display: flex; align-items: center; margin-top: 10px; cursor: pointer;">
+                    <input type="checkbox" id="invite-member-admin" style="margin-right: 8px;">
+                    <span>Set as admin</span>
+                </label>
             </div>
             <div id="invite-member-status" style="margin: 20px 0; color: #0066cc;"></div>
             <div style="display: flex; gap: 10px; margin-top: 20px;">
@@ -2169,6 +2180,18 @@
         }
 
         // Show toast notification
+        // Copy npub to clipboard
+        window.copyNpub = async function() {
+            const npubText = document.getElementById('npub').textContent;
+            try {
+                await navigator.clipboard.writeText(npubText);
+                showToast('📋 Npub copied to clipboard');
+            } catch (err) {
+                console.error('Failed to copy npub:', err);
+                showToast('❌ Failed to copy npub');
+            }
+        };
+
         function showToast(message) {
             const toast = document.createElement('div');
             toast.textContent = message;
@@ -2761,8 +2784,10 @@
                 statusMessage.textContent = 'Step 3: Creating group and sending Welcome message...';
 
                 // Step 3: Actually create the group
-                console.log(`Creating group "${name}" with first member: ${firstMember.substring(0, 16)}...`);
-                const resultJson = await create_group_with_members(name, description, JSON.stringify([firstMember]));
+                const isAdmin = document.getElementById('create-group-first-member-admin').checked;
+                console.log(`Creating group "${name}" with first member: ${firstMember.substring(0, 16)}... (admin: ${isAdmin})`);
+                const members = [{ npub: firstMember, is_admin: isAdmin }];
+                const resultJson = await create_group_with_members(name, description, JSON.stringify(members));
                 const result = JSON.parse(resultJson);
 
                 // Show final result with selected KeyPackage
@@ -3046,7 +3071,9 @@
                 statusMessage.textContent = 'Step 3: Sending invitation to group...';
 
                 // Step 3: Actually send the invitation
-                const resultJson = await invite_member_to_group(currentGroupIdForInvite, npub);
+                const isAdmin = document.getElementById('invite-member-admin').checked;
+                console.log(`Inviting ${npub.substring(0, 16)}... to group (admin: ${isAdmin})`);
+                const resultJson = await invite_member_to_group(currentGroupIdForInvite, npub, isAdmin);
                 const result = JSON.parse(resultJson);
 
                 // Update KeyPackages section to show selected one
