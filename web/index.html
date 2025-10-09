@@ -326,7 +326,10 @@
 
                     <div id="keypackage-list"></div>
 
-                    <button onclick="createKeyPackage()" style="margin-top: 15px;">+ Create KeyPackage</button>
+                    <div style="display: flex; gap: 10px; margin-top: 15px;">
+                        <button onclick="createKeyPackage()">+ Create KeyPackage</button>
+                        <button onclick="checkForInvites()" style="background: #28a745;">📬 Check for Invites</button>
+                    </div>
                 </div>
             </div>
 
@@ -743,6 +746,7 @@
             create_and_publish_keypackage,
             subscribe_to_welcome_messages,
             debug_fetch_welcome_events,
+            process_welcome_event,
             create_group_with_members,
             invite_member_to_group,
             send_message_to_group,
@@ -908,9 +912,6 @@
                 document.getElementById('keypackages-container').style.display = 'block';
                 await refreshKeyPackageList();
                 // await initializeWelcomeSubscription();
-
-                // DEBUG: Poll for Welcomes every 5 seconds
-                startWelcomePolling();
 
                 document.getElementById('buttons').style.display = 'block';
                 document.getElementById('status').innerHTML = '<div class="success">✓ Ready</div>';
@@ -1943,13 +1944,10 @@
             }, 3000);
         }
 
-        // DEBUG: Poll for Welcomes every 10 seconds
-        function startWelcomePolling() {
-            console.log("🔍 Starting Welcome polling (every 10 seconds)...");
-
-            async function pollWelcomes() {
-                try {
-                    console.log("🔍 Polling for Welcome messages...");
+        // Check for invites (Welcome messages)
+        window.checkForInvites = async function() {
+            try {
+                console.log("📬 Checking for invites...");
 
                     // Get our keys
                     const ourPubkeyHex = get_pubkey_hex();
@@ -1998,30 +1996,66 @@
                         const matchingKP = referencedKPs.find(kp => kpEventIds.includes(kp));
                         if (matchingKP) {
                             console.log(`     ✅ References our KeyPackage: ${matchingKP.substring(0, 16)}...`);
-                            console.log(`     📝 TODO: Check if we have private key in storage`);
 
                             // Check if already consumed
                             if (consumed[matchingKP]) {
                                 console.log(`     ⚠️ Already consumed! Used for group: ${consumed[matchingKP]}`);
                             } else {
-                                console.log(`     ⚡ NOT YET CONSUMED - could process this!`);
+                                console.log(`     ⚡ NOT YET CONSUMED - processing now...`);
+
+                                // Process the Welcome
+                                try {
+                                    const resultJson = await process_welcome_event(event.id, matchingKP);
+                                    const result = JSON.parse(resultJson);
+
+                                    console.log(`     ✅ Successfully joined group: ${result.group_name}`);
+
+                                    // Mark KeyPackage as consumed
+                                    markKeyPackageConsumed(matchingKP, result.group_id);
+
+                                    // Refresh UI
+                                    await refreshKeyPackageList();
+                                    await refreshGroups();
+
+                                    // Show toast notification
+                                    showToast(`🎉 Joined group: ${result.group_name}`);
+                                } catch (err) {
+                                    const errorStr = String(err);
+                                    console.error(`     ❌ Failed to process Welcome: ${errorStr}`);
+
+                                    // If it's already processed, mark as consumed to avoid retrying
+                                    if (errorStr.includes("already processed") || errorStr.includes("missing welcome")) {
+                                        console.log(`     ℹ️ Marking KeyPackage as consumed (already processed)`);
+                                        // We don't know the group_id, so use a placeholder
+                                        markKeyPackageConsumed(matchingKP, "unknown_already_joined");
+                                        await refreshKeyPackageList();
+                                    }
+                                }
                             }
                         } else {
                             console.log(`     ❌ Does NOT reference any of our KeyPackages`);
                         }
                     }
 
-                    console.log("🔍 Polling complete\n");
+                console.log("✅ Finished checking for invites\n");
 
-                } catch (err) {
-                    console.error('❌ Error polling Welcomes:', err);
+                // Show toast if no new invites found
+                const foundNew = welcomeEvents.some(event => {
+                    const eTags = event.tags.filter(tag => tag.kind === 'e');
+                    const referencedKPs = eTags.map(tag => tag.content).filter(Boolean);
+                    const matchingKP = referencedKPs.find(kp => kpEventIds.includes(kp));
+                    return matchingKP && !consumed[matchingKP];
+                });
+
+                if (!foundNew) {
+                    showToast('No new invites found');
                 }
-            }
 
-            // Poll immediately, then every 10 seconds
-            pollWelcomes();
-            setInterval(pollWelcomes, 10000);
-        }
+            } catch (err) {
+                console.error('❌ Error checking for invites:', err);
+                showToast('❌ Error checking for invites');
+            }
+        };
 
         // Subscribe to Welcome messages on startup
         async function initializeWelcomeSubscription() {

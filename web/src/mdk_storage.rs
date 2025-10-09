@@ -139,31 +139,12 @@ impl MdkState {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MdkHybridStorage {
     state: Arc<Mutex<MdkState>>,
-    // Note: openmls_storage is NOT Arc because it needs mutable access
-    // and MemoryStorage doesn't implement Clone. However, the MLS key data
-    // is typically much smaller than message data, so not caching it is acceptable.
-    openmls_storage: MemoryStorage,
-}
-
-// Implement Clone manually since MemoryStorage doesn't implement Clone
-impl Clone for MdkHybridStorage {
-    fn clone(&self) -> Self {
-        // Clone the state Arc (cheap - just increments refcount)
-        let state = Arc::clone(&self.state);
-
-        // Reload openmls_storage from localStorage
-        // This is acceptable because MLS encryption keys are much smaller than message data
-        let openmls_storage = Self::load_openmls_storage()
-            .expect("Failed to reload openmls_storage when cloning");
-
-        Self {
-            state,
-            openmls_storage,
-        }
-    }
+    // IMPORTANT: Wrap MemoryStorage in Arc so clones share the same OpenMLS storage
+    // This ensures KeyPackage private keys are accessible across all clones
+    openmls_storage: Arc<MemoryStorage>,
 }
 
 impl MdkHybridStorage {
@@ -249,8 +230,8 @@ impl MdkHybridStorage {
 
     /// Save OpenMLS MemoryStorage to localStorage
     fn save_openmls_storage(&self) -> Result<(), JsValue> {
-        // Get the values from MemoryStorage
-        let values = self.openmls_storage.values.read().unwrap();
+        // Get the values from MemoryStorage (dereference Arc)
+        let values = self.openmls_storage.as_ref().values.read().unwrap();
 
         log(&format!("Saving OpenMLS storage with {} entries", values.len()));
 
@@ -296,7 +277,7 @@ impl MdkHybridStorage {
 
         let storage = Self {
             state: Arc::new(Mutex::new(state)),
-            openmls_storage,
+            openmls_storage: Arc::new(openmls_storage),
         };
 
         // Save immediately to ensure storage is initialized
@@ -533,10 +514,13 @@ impl MdkStorageProvider for MdkHybridStorage {
     }
 
     fn openmls_storage(&self) -> &Self::OpenMlsStorageProvider {
-        &self.openmls_storage
+        self.openmls_storage.as_ref()
     }
 
     fn openmls_storage_mut(&mut self) -> &mut Self::OpenMlsStorageProvider {
-        &mut self.openmls_storage
+        // This is tricky - we need mutable access but Arc doesn't allow that
+        // We'll need to use Arc::get_mut or panic if there are multiple references
+        Arc::get_mut(&mut self.openmls_storage)
+            .expect("Cannot get mutable reference to openmls_storage - multiple references exist")
     }
 }

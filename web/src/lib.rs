@@ -1156,8 +1156,11 @@ pub fn create_and_publish_keypackage() -> js_sys::Promise {
             let keys = get_keys()?;
             let pubkey = keys.public_key();
 
-            // Create MDK
-            let mdk = create_mdk().await?;
+            // Get storage first so we can save it after creating KeyPackage
+            let storage = get_or_create_storage().await?;
+
+            // Create MDK with the storage
+            let mdk = MDK::new(storage.clone());
 
             // Create KeyPackage
             log("Creating KeyPackage...");
@@ -1171,6 +1174,14 @@ pub fn create_and_publish_keypackage() -> js_sys::Promise {
                 .create_key_package_for_event(&pubkey, relay_urls)
                 .map_err(|e| JsValue::from_str(&format!("Failed to create KeyPackage: {}", e)))?;
 
+            log("✓ KeyPackage created");
+
+            // Explicitly save the storage to persist the KeyPackage private key
+            // This must be done BEFORE publishing, so the private key is available for later Welcome processing
+            storage.save_snapshot()
+                .map_err(|e| JsValue::from_str(&format!("Failed to save MDK storage: {:?}", e)))?;
+            log("✓ KeyPackage private key saved to storage");
+
             // Build and sign event
             let event = EventBuilder::new(Kind::Custom(443), key_package_hex)
                 .tags(tags.to_vec())
@@ -1180,12 +1191,6 @@ pub fn create_and_publish_keypackage() -> js_sys::Promise {
             let kp_event_id = event.id.to_hex();
             let created_at = event.created_at.as_u64();
             log(&format!("KeyPackage event ID: {}", kp_event_id));
-
-            // Explicitly save storage to persist private key
-            let storage = get_or_create_storage().await?;
-            storage.save_snapshot()
-                .map_err(|e| JsValue::from_str(&format!("Failed to save storage: {:?}", e)))?;
-            log("✓ KeyPackage private key saved to storage");
 
             // Connect to relays and publish
             let client = create_connected_client().await?;
@@ -1233,13 +1238,18 @@ pub fn create_and_publish_keypackage() -> js_sys::Promise {
 pub fn debug_fetch_welcome_events() -> js_sys::Promise {
     future_to_promise(async move {
         let result = async {
-            log("🔍 DEBUG: Fetching all Welcome events (Kind 444)...");
+            log("🔍 DEBUG: Fetching Welcome events addressed to us (Kind 444)...");
+
+            // Get our pubkey to filter by p tag
+            let keys = get_keys()?;
+            let our_pubkey = keys.public_key();
 
             let client = create_connected_client().await?;
 
-            // Fetch all Kind 444 events (limit 50)
+            // Fetch Kind 444 events addressed to us via p tag
             let filter = nostr::Filter::new()
                 .kind(Kind::Custom(444))
+                .pubkey(our_pubkey)  // Filter by p tag
                 .limit(50);
 
             let events = client.fetch_events(filter, Duration::from_secs(5)).await
@@ -1282,6 +1292,115 @@ pub fn debug_fetch_welcome_events() -> js_sys::Promise {
                 .map_err(|e| JsValue::from_str(&format!("JSON serialization error: {}", e)))?;
 
             client.disconnect().await;
+
+            Ok::<String, JsValue>(json)
+        }
+        .await;
+
+        result.map(|json| JsValue::from_str(&json))
+    })
+}
+
+/// Process a Welcome event by fetching it from relays and joining the group
+/// Returns JSON: { group_id, group_name, kp_event_id }
+#[wasm_bindgen]
+pub fn process_welcome_event(welcome_event_id: String, kp_event_id: String) -> js_sys::Promise {
+    future_to_promise(async move {
+        let result = async {
+            log(&format!("🎉 Processing Welcome event: {}...", &welcome_event_id[..16]));
+
+            // Parse event ID
+            let event_id = nostr::EventId::from_hex(&welcome_event_id)
+                .map_err(|e| JsValue::from_str(&format!("Invalid event ID: {}", e)))?;
+
+            // Fetch the Welcome event from relays
+            log("  Fetching Welcome event from relays...");
+            let client = create_connected_client().await?;
+
+            let filter = nostr::Filter::new()
+                .kind(Kind::Custom(444))
+                .id(event_id);
+
+            let events = client.fetch_events(filter, Duration::from_secs(5)).await
+                .map_err(|e| JsValue::from_str(&format!("Failed to fetch Welcome event: {}", e)))?;
+
+            if events.is_empty() {
+                return Err(JsValue::from_str("Welcome event not found on relays"));
+            }
+
+            let welcome_event = events.into_iter().next().unwrap();
+            log(&format!("  ✓ Found Welcome event: {}", welcome_event.id.to_hex()));
+
+            // Convert to UnsignedEvent for MDK processing
+            let mut rumor = nostr::UnsignedEvent {
+                id: None,
+                pubkey: welcome_event.pubkey,
+                created_at: welcome_event.created_at,
+                kind: welcome_event.kind,
+                tags: welcome_event.tags.clone(),
+                content: welcome_event.content.clone(),
+            };
+            rumor.ensure_id();
+
+            // Create MDK and process Welcome
+            log("  Processing Welcome with MDK...");
+            let mdk = create_mdk().await?;
+
+            // Check if we already have this group (Welcome already processed)
+            let groups = mdk.get_groups()
+                .map_err(|e| JsValue::from_str(&format!("Failed to get groups: {}", e)))?;
+
+            // Try to process the Welcome
+            let welcome = match mdk.process_welcome(&welcome_event.id, &rumor) {
+                Ok(w) => w,
+                Err(e) => {
+                    let error_msg = format!("{}", e);
+                    log(&format!("  ❌ MDK error: {}", error_msg));
+
+                    // Check if this is because we already processed it
+                    if error_msg.contains("missing welcome") || error_msg.contains("already processed") {
+                        log("  ℹ️ This Welcome may have already been processed in a previous session");
+                        log("  Checking if we're already in the group...");
+
+                        // We can't determine the group from a failed process_welcome
+                        // Return an error indicating it's already processed
+                        return Err(JsValue::from_str("Welcome already processed or KeyPackage missing"));
+                    }
+
+                    return Err(JsValue::from_str(&format!("Failed to process Welcome: {}", e)));
+                }
+            };
+
+            let group_id = hex::encode(welcome.mls_group_id.as_slice());
+            let group_name = welcome.group_name.clone();
+            log(&format!("  ✓ Welcome processed! Group: {}", group_name));
+
+            // Accept Welcome (join the group)
+            log("  Accepting Welcome (joining group)...");
+            mdk.accept_welcome(&welcome)
+                .map_err(|e| JsValue::from_str(&format!("Failed to accept Welcome: {}", e)))?;
+
+            log(&format!("✅ Successfully joined group: {}", group_name));
+
+            // Disconnect
+            client.disconnect().await;
+
+            // Return result as JSON
+            #[derive(Serialize)]
+            struct WelcomeResult {
+                group_id: String,
+                group_name: String,
+                kp_event_id: String,
+            }
+
+            let result = WelcomeResult {
+                group_id,
+                group_name,
+                kp_event_id,
+            };
+
+            let json = serde_json::to_string(&result)
+                .map_err(|e| JsValue::from_str(&format!("JSON serialization error: {}", e)))?;
 
             Ok::<String, JsValue>(json)
         }
