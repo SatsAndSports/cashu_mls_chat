@@ -1126,16 +1126,45 @@ pub fn create_and_publish_keypackage() -> js_sys::Promise {
             // Disconnect
             let _ = client.disconnect().await;
 
-            // Return event ID and timestamp as JSON
+            // Return event ID, timestamp, and relay results as JSON
+            #[derive(Serialize)]
+            struct RelayResult {
+                url: String,
+                success: bool,
+                error: Option<String>,
+            }
+
             #[derive(Serialize)]
             struct KeyPackageResult {
                 event_id: String,
                 created_at: u64,
+                relays: Vec<RelayResult>,
+            }
+
+            let mut relay_results = Vec::new();
+
+            // Add successful relays
+            for relay_url in send_result.success.iter() {
+                relay_results.push(RelayResult {
+                    url: relay_url.to_string(),
+                    success: true,
+                    error: None,
+                });
+            }
+
+            // Add failed relays
+            for (relay_url, error) in send_result.failed.iter() {
+                relay_results.push(RelayResult {
+                    url: relay_url.to_string(),
+                    success: false,
+                    error: Some(error.to_string()),
+                });
             }
 
             let result = KeyPackageResult {
                 event_id: kp_event_id,
                 created_at,
+                relays: relay_results,
             };
 
             let json = serde_json::to_string(&result)

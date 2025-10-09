@@ -648,13 +648,23 @@
 
     <!-- Creating KeyPackage Modal -->
     <div id="creating-keypackage-modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000;">
-        <div style="background: white; max-width: 500px; margin: 100px auto; padding: 40px; border-radius: 8px; text-align: center;">
-            <div style="font-size: 48px; margin-bottom: 20px;">📦</div>
-            <h2 style="margin-bottom: 15px;">Creating KeyPackage</h2>
-            <p style="color: #666; margin-bottom: 20px;">
-                Generating cryptographic keys and publishing to relays...
-            </p>
-            <div style="margin: 30px auto; width: 40px; height: 40px; border: 4px solid #f3f3f3; border-top: 4px solid #0066cc; border-radius: 50%; animation: spin 1s linear infinite;"></div>
+        <div style="background: white; max-width: 600px; margin: 50px auto; padding: 30px; border-radius: 8px;">
+            <div style="text-align: center;">
+                <div style="font-size: 48px; margin-bottom: 20px;">📦</div>
+                <h2 style="margin-bottom: 15px;">Publishing KeyPackage</h2>
+            </div>
+
+            <div id="kp-status-message" style="text-align: center; color: #666; margin-bottom: 25px;">
+                Generating cryptographic keys...
+            </div>
+
+            <div id="kp-relay-status" style="margin-bottom: 20px;">
+                <!-- Relay status will be populated here -->
+            </div>
+
+            <div id="kp-close-button-container" style="display: none; text-align: center; margin-top: 20px;">
+                <button onclick="closeKeyPackageModal()" style="padding: 12px 30px; background: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;">Close</button>
+            </div>
         </div>
     </div>
 
@@ -1911,11 +1921,16 @@
             }
         };
 
-        window.confirmResetIdentity = function() {
+        window.confirmResetIdentity = async function() {
             try {
-                clear_keys();
+                // Clear everything except wallet
+                clearAllExceptWallet();
+
+                // Generate new random keys
+                await generate_keys();
+
                 closeResetIdentityModal();
-                // Reload the page to start fresh
+                // Reload the page to start fresh with new identity
                 window.location.reload();
             } catch (err) {
                 console.error('Failed to reset identity:', err);
@@ -1963,17 +1978,21 @@
             }
         };
 
-        // Helper function to clear all localStorage except wallet data
+        // Helper function to clear all localStorage except wallet data and relays
         function clearAllExceptWallet() {
-            // Save wallet state (this is the key used by HybridWalletDatabase)
+            // Save wallet state and relay configuration
             const walletState = localStorage.getItem('wallet_state');
+            const nostrRelays = localStorage.getItem('nostr_relays');
 
             // Clear everything
             localStorage.clear();
 
-            // Restore wallet data
+            // Restore wallet data and relays
             if (walletState) {
                 localStorage.setItem('wallet_state', walletState);
+            }
+            if (nostrRelays) {
+                localStorage.setItem('nostr_relays', nostrRelays);
             }
         }
 
@@ -1981,11 +2000,24 @@
         // KEY PACKAGE MANAGEMENT
         // ==========================================
 
+        // Close KeyPackage modal
+        window.closeKeyPackageModal = function() {
+            document.getElementById('creating-keypackage-modal').style.display = 'none';
+        };
+
         // Create a new KeyPackage
         window.createKeyPackage = async function() {
             try {
-                // Show modal
-                document.getElementById('creating-keypackage-modal').style.display = 'block';
+                // Show modal and reset content
+                const modal = document.getElementById('creating-keypackage-modal');
+                const statusMessage = document.getElementById('kp-status-message');
+                const relayStatusDiv = document.getElementById('kp-relay-status');
+                const closeButtonContainer = document.getElementById('kp-close-button-container');
+
+                modal.style.display = 'block';
+                statusMessage.textContent = 'Generating cryptographic keys...';
+                relayStatusDiv.innerHTML = '';
+                closeButtonContainer.style.display = 'none';
 
                 console.log("Creating KeyPackage...");
                 const resultJson = await create_and_publish_keypackage();
@@ -1993,22 +2025,55 @@
 
                 console.log("KeyPackage created:", result);
 
+                // Update status message
+                statusMessage.textContent = 'Publishing to relays...';
+
+                // Display relay results
+                let relayHtml = '<div style="max-height: 300px; overflow-y: auto;">';
+                result.relays.forEach(relay => {
+                    const icon = relay.success ? '✅' : '❌';
+                    const color = relay.success ? '#28a745' : '#dc3545';
+                    const errorMsg = relay.error ? `<div style="font-size: 0.85em; color: #666; margin-left: 25px;">${relay.error}</div>` : '';
+
+                    relayHtml += `
+                        <div style="padding: 8px; border-bottom: 1px solid #eee;">
+                            <div style="display: flex; align-items: center;">
+                                <span style="font-size: 18px; margin-right: 10px;">${icon}</span>
+                                <span style="flex: 1; font-family: monospace; font-size: 0.9em; color: ${color};">${relay.url}</span>
+                            </div>
+                            ${errorMsg}
+                        </div>
+                    `;
+                });
+                relayHtml += '</div>';
+                relayStatusDiv.innerHTML = relayHtml;
+
+                // Update final status
+                const successCount = result.relays.filter(r => r.success).length;
+                const totalCount = result.relays.length;
+                statusMessage.innerHTML = `<strong>Published to ${successCount}/${totalCount} relays</strong>`;
+
                 // Save to localStorage
                 saveCreatedKeyPackage(result.event_id, result.created_at);
 
                 // Refresh list
                 await refreshKeyPackageList();
 
-                // Hide modal
-                document.getElementById('creating-keypackage-modal').style.display = 'none';
+                // Show close button
+                closeButtonContainer.style.display = 'block';
 
                 showToast('✅ KeyPackage created and published!');
             } catch (err) {
-                // Hide modal on error
-                document.getElementById('creating-keypackage-modal').style.display = 'none';
+                // Show error in modal
+                const statusMessage = document.getElementById('kp-status-message');
+                const relayStatusDiv = document.getElementById('kp-relay-status');
+                const closeButtonContainer = document.getElementById('kp-close-button-container');
+
+                statusMessage.innerHTML = '<strong style="color: #dc3545;">❌ Failed to create KeyPackage</strong>';
+                relayStatusDiv.innerHTML = `<div style="padding: 15px; background: #fff3cd; border: 1px solid #ffc107; border-radius: 4px; color: #856404;">${err}</div>`;
+                closeButtonContainer.style.display = 'block';
 
                 console.error('Failed to create KeyPackage:', err);
-                alert(`Failed to create KeyPackage: ${err}`);
             }
         };
 
