@@ -911,6 +911,77 @@ pub fn receive_token(token_str: String) -> js_sys::Promise {
     })
 }
 
+/// Decode a Lightning invoice to extract amount and description
+/// Returns JSON with: { amount_msat, description }
+#[wasm_bindgen]
+pub fn decode_lightning_invoice(invoice: String) -> js_sys::Promise {
+    future_to_promise(async move {
+        use cdk_common::lightning_invoice::Bolt11Invoice;
+
+        let parsed = Bolt11Invoice::from_str(&invoice)
+            .map_err(|e| JsValue::from_str(&format!("Invalid invoice: {}", e)))?;
+
+        let amount_msat = parsed.amount_milli_satoshis()
+            .ok_or_else(|| JsValue::from_str("Invoice has no amount"))?;
+
+        let description = match parsed.description() {
+            cdk_common::lightning_invoice::Bolt11InvoiceDescriptionRef::Direct(desc) => desc.to_string(),
+            cdk_common::lightning_invoice::Bolt11InvoiceDescriptionRef::Hash(_) => String::new(),
+        };
+
+        let result = serde_json::json!({
+            "amount_msat": amount_msat,
+            "description": description
+        });
+
+        Ok(JsValue::from_str(&result.to_string()))
+    })
+}
+
+/// Pay a Lightning invoice using the current mint
+/// Returns JSON with: { preimage }
+#[wasm_bindgen]
+pub fn pay_lightning_invoice(invoice: String) -> js_sys::Promise {
+    future_to_promise(async move {
+        let result = async {
+            log(&format!("Paying Lightning invoice..."));
+
+            // Create wallet for current mint
+            let wallet = create_wallet().await?;
+
+            // Step 1: Create melt quote
+            log("Creating melt quote...");
+            let quote = wallet
+                .melt_quote(invoice.clone(), None)
+                .await
+                .map_err(|e| JsValue::from_str(&format!("Failed to create melt quote: {}", e)))?;
+
+            log(&format!("Melt quote created: {} sats fee", quote.fee_reserve));
+
+            // Step 2: Pay the invoice using the quote
+            log("Melting tokens to pay invoice...");
+            let melt_response = wallet
+                .melt(&quote.id)
+                .await
+                .map_err(|e| JsValue::from_str(&format!("Failed to pay invoice: {}", e)))?;
+
+            let preimage = melt_response.preimage
+                .ok_or_else(|| JsValue::from_str("No preimage returned"))?;
+
+            log(&format!("✅ Payment successful! Preimage: {}", preimage));
+
+            let result = serde_json::json!({
+                "preimage": preimage
+            });
+
+            Ok::<String, JsValue>(result.to_string())
+        }
+        .await;
+
+        result.map(|json| JsValue::from_str(&json))
+    })
+}
+
 /// Get all groups from MDK storage
 /// Returns a Promise that resolves to a JSON array of groups
 #[wasm_bindgen]

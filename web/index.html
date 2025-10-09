@@ -4,6 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>MDK Ecash Web Client</title>
+    <!-- QR Code Scanner Library -->
+    <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
     <style>
         * {
             margin: 0;
@@ -355,6 +357,9 @@
                     <button onclick="showSendModal()" style="flex: 1; padding: 15px 30px; font-size: 1.1em; background: #0066cc; border-radius: 8px;">
                         📤 Send e-cash
                     </button>
+                    <button onclick="showPayLightningModal()" style="flex: 1; padding: 15px 30px; font-size: 1.1em; background: #f59e0b; border-radius: 8px;">
+                        ⚡ Pay Lightning Invoice
+                    </button>
                 </div>
 
                 <div id="wallet-status" style="margin-bottom: 20px;">Initializing wallet...</div>
@@ -461,6 +466,55 @@
             <div style="margin-top: 20px; display: flex; gap: 10px;">
                 <button onclick="createSendToken()" style="flex: 1; padding: 12px; background: #0066cc; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 1em;">Create Token</button>
                 <button onclick="hideSendModal()" style="padding: 12px 30px; background: #ccc; border: none; border-radius: 4px; cursor: pointer;">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Pay Lightning Invoice Modal -->
+    <div id="pay-lightning-modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000;">
+        <div style="background: white; max-width: 600px; margin: 50px auto; padding: 20px; border-radius: 8px;">
+            <h2>⚡ Pay Lightning Invoice</h2>
+
+            <div style="margin: 20px 0;">
+                <label style="display: block; margin-bottom: 5px; font-weight: bold;">Lightning Invoice:</label>
+                <textarea id="lightning-invoice-input" rows="4" placeholder="Paste Lightning invoice (lnbc...)" style="width: 100%; font-family: monospace; padding: 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 0.9em;" oninput="decodeLightningInvoice()"></textarea>
+            </div>
+
+            <div style="margin: 20px 0; display: flex; gap: 10px;">
+                <button onclick="showQRScanner()" style="flex: 1; padding: 12px; background: #6b7280; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 1em;">
+                    📷 Scan QR Code
+                </button>
+            </div>
+
+            <!-- QR Scanner (hidden by default) -->
+            <div id="qr-scanner-container" style="display: none; margin: 20px 0;">
+                <div id="qr-reader"></div>
+                <button onclick="hideQRScanner()" style="margin-top: 10px; padding: 8px 16px; background: #ccc; border: none; border-radius: 4px; cursor: pointer;">Close Scanner</button>
+            </div>
+
+            <!-- Decoded invoice info -->
+            <div id="lightning-invoice-info" style="display: none; margin: 20px 0; padding: 15px; background: #f3f4f6; border-radius: 4px;">
+                <div style="margin-bottom: 10px;">
+                    <strong>Amount:</strong> <span id="invoice-amount">-</span> sats
+                </div>
+                <div style="margin-bottom: 10px;">
+                    <strong>Description:</strong> <span id="invoice-description">-</span>
+                </div>
+                <div style="margin-bottom: 10px;">
+                    <strong>Paying from:</strong> <span id="invoice-mint">-</span>
+                </div>
+                <div>
+                    <strong>Your balance:</strong> <span id="invoice-balance">-</span> sats
+                </div>
+            </div>
+
+            <div id="pay-lightning-status" style="margin-top: 10px;"></div>
+
+            <div style="margin-top: 20px; display: flex; gap: 10px;">
+                <button id="pay-invoice-button" onclick="payLightningInvoice()" disabled style="flex: 1; padding: 12px; background: #f59e0b; color: white; border: none; border-radius: 4px; cursor: not-allowed; font-size: 1em;">
+                    Pay Invoice
+                </button>
+                <button onclick="hidePayLightningModal()" style="padding: 12px 30px; background: #ccc; border: none; border-radius: 4px; cursor: pointer;">Cancel</button>
             </div>
         </div>
     </div>
@@ -865,6 +919,8 @@
             receive_token,
             send_ecash,
             parse_token_info,
+            decode_lightning_invoice,
+            pay_lightning_invoice,
             get_groups,
             fetch_welcome_events,
             process_pending_welcomes,
@@ -2733,6 +2789,174 @@
             } catch (err) {
                 console.error('Failed to create token:', err);
                 statusDiv.innerHTML = `<div class="error">Failed to create token: ${err}</div>`;
+            }
+        };
+
+        // ========== Pay Lightning Invoice Modal Functions ==========
+
+        let html5QrcodeScanner = null;
+
+        window.showPayLightningModal = async function() {
+            document.getElementById('pay-lightning-modal').style.display = 'block';
+            document.getElementById('lightning-invoice-input').value = '';
+            document.getElementById('lightning-invoice-info').style.display = 'none';
+            document.getElementById('pay-lightning-status').innerHTML = '';
+            document.getElementById('pay-invoice-button').disabled = true;
+            document.getElementById('pay-invoice-button').style.cursor = 'not-allowed';
+            document.getElementById('pay-invoice-button').style.opacity = '0.5';
+        };
+
+        window.hidePayLightningModal = function() {
+            document.getElementById('pay-lightning-modal').style.display = 'none';
+            if (html5QrcodeScanner) {
+                html5QrcodeScanner.clear();
+                html5QrcodeScanner = null;
+            }
+        };
+
+        window.showQRScanner = function() {
+            const scannerContainer = document.getElementById('qr-scanner-container');
+            scannerContainer.style.display = 'block';
+
+            try {
+                // Clear any existing scanner
+                if (html5QrcodeScanner) {
+                    html5QrcodeScanner.clear();
+                }
+
+                // Create new scanner with built-in UI
+                html5QrcodeScanner = new Html5QrcodeScanner(
+                    "qr-reader",
+                    {
+                        fps: 10,
+                        qrbox: { width: 250, height: 250 },
+                        rememberLastUsedCamera: true
+                    },
+                    false  // verbose logging
+                );
+
+                // Render scanner with callbacks
+                html5QrcodeScanner.render(
+                    (decodedText, decodedResult) => {
+                        // Success callback - QR code scanned
+                        console.log('QR code scanned:', decodedText.substring(0, 20) + '...');
+                        document.getElementById('lightning-invoice-input').value = decodedText;
+                        decodeLightningInvoice();
+                        hideQRScanner();
+                    },
+                    (errorMessage) => {
+                        // Error callback - usually just "no QR code found"
+                        // Don't log these as they're very frequent
+                    }
+                );
+            } catch (err) {
+                console.error('Failed to start QR scanner:', err);
+                alert('Failed to start camera: ' + err);
+                scannerContainer.style.display = 'none';
+            }
+        };
+
+        window.hideQRScanner = function() {
+            if (html5QrcodeScanner) {
+                html5QrcodeScanner.clear().then(() => {
+                    html5QrcodeScanner = null;
+                }).catch(err => {
+                    console.error('Error clearing scanner:', err);
+                    html5QrcodeScanner = null;
+                });
+            }
+            document.getElementById('qr-scanner-container').style.display = 'none';
+        };
+
+        window.decodeLightningInvoice = async function() {
+            const invoice = document.getElementById('lightning-invoice-input').value.trim();
+            const infoDiv = document.getElementById('lightning-invoice-info');
+            const payButton = document.getElementById('pay-invoice-button');
+
+            if (!invoice || !invoice.toLowerCase().startsWith('lnbc')) {
+                infoDiv.style.display = 'none';
+                payButton.disabled = true;
+                payButton.style.cursor = 'not-allowed';
+                payButton.style.opacity = '0.5';
+                return;
+            }
+
+            try {
+                // Decode invoice using Rust function
+                const decodedJson = await decode_lightning_invoice(invoice);
+                const decoded = JSON.parse(decodedJson);
+
+                // Get current mint and balance
+                const currentMint = await get_current_mint();
+                const currentBalance = await get_balance();
+
+                // Display decoded info
+                document.getElementById('invoice-amount').textContent = decoded.amount_msat / 1000;
+                document.getElementById('invoice-description').textContent = decoded.description || '(none)';
+                document.getElementById('invoice-mint').textContent = currentMint.substring(0, 30) + '...';
+                document.getElementById('invoice-balance').textContent = currentBalance;
+
+                infoDiv.style.display = 'block';
+
+                // Enable pay button if sufficient balance
+                const amountSats = decoded.amount_msat / 1000;
+                if (currentBalance >= amountSats) {
+                    payButton.disabled = false;
+                    payButton.style.cursor = 'pointer';
+                    payButton.style.opacity = '1';
+                } else {
+                    payButton.disabled = true;
+                    payButton.style.cursor = 'not-allowed';
+                    payButton.style.opacity = '0.5';
+                    document.getElementById('pay-lightning-status').innerHTML =
+                        `<div class="error">Insufficient balance. Need ${amountSats} sats, have ${currentBalance} sats.</div>`;
+                }
+            } catch (err) {
+                console.error('Failed to decode invoice:', err);
+                infoDiv.style.display = 'none';
+                payButton.disabled = true;
+                payButton.style.cursor = 'not-allowed';
+                payButton.style.opacity = '0.5';
+                document.getElementById('pay-lightning-status').innerHTML =
+                    `<div class="error">Invalid Lightning invoice</div>`;
+            }
+        };
+
+        window.payLightningInvoice = async function() {
+            const invoice = document.getElementById('lightning-invoice-input').value.trim();
+            const statusDiv = document.getElementById('pay-lightning-status');
+            const payButton = document.getElementById('pay-invoice-button');
+
+            payButton.disabled = true;
+            payButton.style.cursor = 'not-allowed';
+            payButton.style.opacity = '0.5';
+
+            statusDiv.innerHTML = '<div>⏳ Paying invoice...</div>';
+
+            try {
+                const resultJson = await pay_lightning_invoice(invoice);
+                const result = JSON.parse(resultJson);
+
+                statusDiv.innerHTML = `
+                    <div class="success">✅ Payment successful!</div>
+                    <div style="margin-top: 10px; font-size: 0.9em;">
+                        <strong>Preimage:</strong> <code style="word-break: break-all;">${result.preimage}</code>
+                    </div>
+                `;
+
+                // Update balance display
+                await refreshMintBalances();
+
+                // Clear form after 3 seconds
+                setTimeout(() => {
+                    hidePayLightningModal();
+                }, 3000);
+            } catch (err) {
+                console.error('Failed to pay invoice:', err);
+                statusDiv.innerHTML = `<div class="error">Payment failed: ${err}</div>`;
+                payButton.disabled = false;
+                payButton.style.cursor = 'pointer';
+                payButton.style.opacity = '1';
             }
         };
 
