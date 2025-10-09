@@ -311,6 +311,7 @@
                     <div style="display: flex; align-items: center; gap: 10px;">
                         <div class="npub" id="npub" style="flex: 1;"></div>
                         <button onclick="copyNpub()" style="padding: 8px 12px; background: #f0f0f0; border: 1px solid #ccc; border-radius: 4px; cursor: pointer; font-size: 0.9em;" title="Copy npub">📋</button>
+                        <button onclick="showNpubQR()" style="padding: 8px 12px; background: #f0f0f0; border: 1px solid #ccc; border-radius: 4px; cursor: pointer; font-size: 0.9em;" title="Show QR code">📷</button>
                     </div>
 
                     <div style="margin-top: 20px;">
@@ -380,6 +381,14 @@
                     <h3>Manage Trusted Mints</h3>
                     <div id="trusted-mints-list" style="margin: 15px 0;"></div>
                     <button onclick="showAddMintModal()">➕ Add Trusted Mint</button>
+                </div>
+
+                <!-- Transaction History -->
+                <div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #ddd;">
+                    <h3>Transaction History</h3>
+                    <div id="transaction-history" style="margin: 15px 0; max-height: 400px; overflow-y: auto;">
+                        <p style="color: #666;">Loading transactions...</p>
+                    </div>
                 </div>
             </div>
 
@@ -476,8 +485,8 @@
     </div>
 
     <!-- Pay Lightning Invoice Modal -->
-    <div id="pay-lightning-modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000;">
-        <div style="background: white; max-width: 600px; margin: 50px auto; padding: 20px; border-radius: 8px;">
+    <div id="pay-lightning-modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000; overflow-y: auto;">
+        <div style="background: white; max-width: 600px; margin: 50px auto; padding: 20px; border-radius: 8px; max-height: calc(100vh - 100px); overflow-y: auto;">
             <h2>⚡ Pay Lightning Invoice</h2>
 
             <div style="margin: 20px 0;">
@@ -531,8 +540,8 @@
     </div>
 
     <!-- Receive Lightning Modal -->
-    <div id="receive-lightning-modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000;">
-        <div style="background: white; max-width: 600px; margin: 50px auto; padding: 20px; border-radius: 8px;">
+    <div id="receive-lightning-modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000; overflow-y: auto;">
+        <div style="background: white; max-width: 600px; margin: 50px auto; padding: 20px; border-radius: 8px; max-height: calc(100vh - 100px); overflow-y: auto;">
             <h2>⚡ Receive Lightning</h2>
 
             <div style="margin: 20px 0;">
@@ -583,8 +592,8 @@
     </div>
 
     <!-- Create Group Modal -->
-    <div id="create-group-modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000;">
-        <div style="background: white; max-width: 500px; margin: 100px auto; padding: 30px; border-radius: 8px;">
+    <div id="create-group-modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000; overflow-y: auto;">
+        <div style="background: white; max-width: 500px; margin: 100px auto; padding: 30px; border-radius: 8px; max-height: calc(100vh - 100px); overflow-y: auto;">
             <h2>➕ Create New Group</h2>
             <div style="margin: 20px 0;">
                 <label style="display: block; margin-bottom: 5px; font-weight: bold;">Group Name:</label>
@@ -596,7 +605,14 @@
             </div>
             <div style="margin: 20px 0;">
                 <label style="display: block; margin-bottom: 5px; font-weight: bold;">First member to invite:</label>
-                <input type="text" id="create-group-first-member" placeholder="npub1..." style="width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 4px; font-family: monospace; font-size: 0.9em;">
+                <div style="display: flex; gap: 10px; margin-bottom: 10px;">
+                    <input type="text" id="create-group-first-member" placeholder="npub1..." style="flex: 1; padding: 10px; border: 1px solid #ccc; border-radius: 4px; font-family: monospace; font-size: 0.9em;">
+                    <button onclick="scanQRForCreateGroup()" style="padding: 10px 15px; background: #6b7280; color: white; border: none; border-radius: 4px; cursor: pointer; white-space: nowrap;">📷 Scan QR</button>
+                </div>
+                <div id="create-group-qr-scanner" style="display: none; margin: 10px 0;">
+                    <div id="create-group-qr-reader"></div>
+                    <button onclick="closeCreateGroupQRScanner()" style="margin-top: 10px; padding: 8px 16px; background: #ccc; border: none; border-radius: 4px; cursor: pointer;">Close Scanner</button>
+                </div>
                 <p style="font-size: 0.9em; color: #666; margin-top: 5px;">Groups require you and at least 1 other member. You can invite more people later.</p>
                 <label style="display: flex; align-items: center; margin-top: 10px; cursor: pointer;">
                     <input type="checkbox" id="create-group-first-member-admin" style="margin-right: 8px;">
@@ -612,12 +628,19 @@
     </div>
 
     <!-- Invite Member Modal -->
-    <div id="invite-member-modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000;">
-        <div style="background: white; max-width: 500px; margin: 100px auto; padding: 30px; border-radius: 8px;">
+    <div id="invite-member-modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000; overflow-y: auto;">
+        <div style="background: white; max-width: 500px; margin: 100px auto; padding: 30px; border-radius: 8px; max-height: calc(100vh - 100px); overflow-y: auto;">
             <h2>➕ Invite Member to Group</h2>
             <div style="margin: 20px 0;">
                 <label style="display: block; margin-bottom: 5px; font-weight: bold;">Member's npub:</label>
-                <input type="text" id="invite-member-npub" placeholder="npub1abc..." style="width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 4px; font-family: monospace; font-size: 0.9em;">
+                <div style="display: flex; gap: 10px; margin-bottom: 10px;">
+                    <input type="text" id="invite-member-npub" placeholder="npub1abc..." style="flex: 1; padding: 10px; border: 1px solid #ccc; border-radius: 4px; font-family: monospace; font-size: 0.9em;">
+                    <button onclick="scanQRForInvite()" style="padding: 10px 15px; background: #6b7280; color: white; border: none; border-radius: 4px; cursor: pointer; white-space: nowrap;">📷 Scan QR</button>
+                </div>
+                <div id="invite-qr-scanner" style="display: none; margin: 10px 0;">
+                    <div id="invite-qr-reader"></div>
+                    <button onclick="closeInviteQRScanner()" style="margin-top: 10px; padding: 8px 16px; background: #ccc; border: none; border-radius: 4px; cursor: pointer;">Close Scanner</button>
+                </div>
                 <p style="font-size: 0.9em; color: #666; margin-top: 5px;">Enter the npub of the person you want to invite</p>
                 <label style="display: flex; align-items: center; margin-top: 10px; cursor: pointer;">
                     <input type="checkbox" id="invite-member-admin" style="margin-right: 8px;">
@@ -701,6 +724,15 @@
                 </select>
             </div>
             <div style="margin: 20px 0;">
+                <label style="display: block; margin-bottom: 5px; font-weight: bold;">Recipient (P2PK):</label>
+                <select id="send-ecash-chat-recipient-select" style="width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 1em;">
+                    <option value="">Anyone (not locked)</option>
+                </select>
+                <div style="font-size: 0.85em; color: #666; margin-top: 5px;">
+                    🔒 Lock token to specific member's pubkey (only they can redeem)
+                </div>
+            </div>
+            <div style="margin: 20px 0;">
                 <label style="display: block; margin-bottom: 5px; font-weight: bold;">Amount (sats):</label>
                 <input type="number" id="send-ecash-chat-amount" placeholder="" min="1" style="width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 1.1em;">
             </div>
@@ -709,6 +741,16 @@
                 <button onclick="sendEcashToChat()" style="flex: 1; padding: 12px; background: #ff8800; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 1em;">Send to Group</button>
                 <button onclick="hideSendEcashInChatModal()" style="padding: 12px 30px; background: #ccc; border: none; border-radius: 4px; cursor: pointer;">Cancel</button>
             </div>
+        </div>
+    </div>
+
+    <!-- Npub QR Code Modal -->
+    <div id="npub-qr-modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000; overflow-y: auto;">
+        <div style="background: white; max-width: 400px; margin: 50px auto; padding: 30px; border-radius: 8px; text-align: center; max-height: calc(100vh - 100px); overflow-y: auto;">
+            <h2>Your npub QR Code</h2>
+            <div id="npub-qr-code" style="display: flex; justify-content: center; margin: 20px 0;"></div>
+            <div style="word-break: break-all; font-family: monospace; font-size: 0.85em; color: #666; margin: 15px 0;" id="npub-qr-text"></div>
+            <button onclick="closeNpubQR()" style="padding: 10px 30px; background: #ccc; border: none; border-radius: 4px; cursor: pointer;">Close</button>
         </div>
     </div>
 
@@ -810,7 +852,7 @@
 
     <!-- Invite Member Details Modal -->
     <div id="invite-details-modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000; overflow-y: auto;">
-        <div style="background: white; max-width: 800px; margin: 30px auto; padding: 30px; border-radius: 8px; margin-bottom: 30px;">
+        <div style="background: white; max-width: 800px; margin: 30px auto; padding: 30px; border-radius: 8px; margin-bottom: 30px; max-height: calc(100vh - 60px); overflow-y: auto;">
             <div style="text-align: center;">
                 <div style="font-size: 48px; margin-bottom: 20px;">👋</div>
                 <h2 style="margin-bottom: 15px;">Inviting Member to Group</h2>
@@ -979,8 +1021,10 @@
             clear_storage_cache,
             init_wallet,
             get_balance,
+            get_transaction_history,
             receive_token,
             send_ecash,
+            send_ecash_p2pk,
             parse_token_info,
             decode_lightning_invoice,
             pay_lightning_invoice_with_quote,
@@ -995,9 +1039,12 @@
             debug_fetch_welcome_events,
             process_welcome_event,
             create_group_with_members,
+            create_group_and_publish,
             fetch_keypackages_for_npub,
             fetch_deletions_for_npub,
-            invite_member_to_group,
+            add_member_and_publish,
+            publish_welcome_message,
+            promote_to_admin_and_publish,
             remove_member_from_group,
             send_message_to_group,
             get_messages_for_group,
@@ -1139,6 +1186,9 @@
                 refreshGroups();
             } else if (sectionName === 'relays') {
                 loadRelays();
+            } else if (sectionName === 'wallet') {
+                refreshMintBalances();
+                refreshTransactionHistory();
             }
 
             // Update URL hash (unless we're restoring from hash)
@@ -1249,6 +1299,9 @@
                 // Load and display trusted mints
                 await refreshTrustedMints();
 
+                // Load and display transaction history
+                await refreshTransactionHistory();
+
                 log("Wallet initialized");
             } catch (err) {
                 console.error('Failed to initialize wallet:', err);
@@ -1352,6 +1405,47 @@
                 }).join('');
             } catch (err) {
                 console.error('Failed to load trusted mints:', err);
+            }
+        }
+
+        // Refresh transaction history
+        async function refreshTransactionHistory() {
+            try {
+                const historyJson = await get_transaction_history();
+                const transactions = JSON.parse(historyJson);
+
+                const historyDiv = document.getElementById('transaction-history');
+
+                if (transactions.length === 0) {
+                    historyDiv.innerHTML = '<p style="color: #666; font-style: italic;">No transactions yet</p>';
+                    return;
+                }
+
+                historyDiv.innerHTML = transactions.map(tx => {
+                    const date = new Date(tx.timestamp * 1000);
+                    const dateStr = date.toLocaleString();
+                    const isIncoming = tx.direction === 'Incoming';
+                    const arrow = isIncoming ? '📥' : '📤';
+                    const color = isIncoming ? '#28a745' : '#0066cc';
+                    const sign = isIncoming ? '+' : '-';
+                    const shortMint = tx.mint.substring(0, 30) + (tx.mint.length > 30 ? '...' : '');
+
+                    return `
+                        <div style="background: #f9f9f9; border-left: 4px solid ${color}; border-radius: 4px; padding: 12px; margin: 8px 0;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
+                                <strong style="color: ${color};">${arrow} ${tx.direction === 'Incoming' ? 'Received' : 'Sent'}</strong>
+                                <strong style="font-size: 1.1em;">${sign}${tx.amount} sats</strong>
+                            </div>
+                            <div style="font-size: 0.85em; color: #666;">
+                                <div style="margin: 3px 0;">${dateStr}</div>
+                                <div style="margin: 3px 0;"><code style="font-size: 0.85em;">${shortMint}</code></div>
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+            } catch (err) {
+                console.error('Failed to load transaction history:', err);
+                document.getElementById('transaction-history').innerHTML = '<p style="color: #dc3545;">Failed to load transactions</p>';
             }
         }
 
@@ -1747,8 +1841,17 @@
                     const tokenId = `token-${tokenIdCounter++}`;
                     tokenStore.set(tokenId, token);
 
+                    let kindDisplay = '';
+                    if (info.secret_kind) {
+                        if (info.secret_npub) {
+                            const displayName = await getDisplayName(info.secret_npub);
+                            kindDisplay = ` (${info.secret_kind} → ${displayName} [${info.secret_npub}])`;
+                        } else {
+                            kindDisplay = ` (${info.secret_kind})`;
+                        }
+                    }
                     const tokenHtml = `<span style="background: #ff8800; color: white; padding: 4px 8px; border-radius: 4px; font-weight: bold; display: inline-block; margin: 2px 0;">
-                        ${info.amount} sats @ ${mintDisplay}
+                        ${info.amount} sats @ ${mintDisplay}${kindDisplay}
                         <button onclick="copyToken('${tokenId}', event)" style="background: white; color: #ff8800; border: none; padding: 2px 6px; margin-left: 4px; border-radius: 3px; cursor: pointer; font-weight: bold; font-size: 0.9em;">Copy</button>
                         <button id="${tokenId}" onclick="redeemToken('${tokenId}')" style="background: white; color: #ff8800; border: none; padding: 2px 6px; margin-left: 4px; border-radius: 3px; cursor: pointer; font-weight: bold; font-size: 0.9em;">Redeem</button>
                     </span>`;
@@ -2053,6 +2156,35 @@
                     `<div class="error">Failed to get keys: ${err}</div>`;
             }
         }
+
+        // Npub QR Code Modal Functions
+        window.showNpubQR = async function() {
+            const npub = await get_npub();
+
+            // Clear previous QR code
+            const qrContainer = document.getElementById('npub-qr-code');
+            qrContainer.innerHTML = '';
+
+            // Generate new QR code
+            new QRCode(qrContainer, {
+                text: npub,
+                width: 256,
+                height: 256,
+                colorDark: '#000000',
+                colorLight: '#ffffff',
+                correctLevel: QRCode.CorrectLevel.H
+            });
+
+            // Show npub text
+            document.getElementById('npub-qr-text').textContent = npub;
+
+            // Show modal
+            document.getElementById('npub-qr-modal').style.display = 'block';
+        };
+
+        window.closeNpubQR = function() {
+            document.getElementById('npub-qr-modal').style.display = 'none';
+        };
 
         // Reset Identity Modal Functions
         window.showResetIdentityModal = function() {
@@ -2383,8 +2515,13 @@
                 const now = Math.floor(Date.now() / 1000);
 
                 // Check cache first (24 hour expiry)
-                if (cache[npub] && (now - cache[npub].cached_at) < 86400) {
-                    return cache[npub];
+                if (cache[npub]) {
+                    const cachedEntry = cache[npub];
+                    // Check if cache is still valid (24 hours)
+                    if (cachedEntry.cached_at && (now - cachedEntry.cached_at) < 86400) {
+                        // Return the data field (which could be null if no profile exists)
+                        return cachedEntry.data;
+                    }
                 }
 
                 // Fetch from relays via Rust function
@@ -2392,6 +2529,12 @@
 
                 if (!contentJson) {
                     console.log(`No profile metadata found for ${npub.substring(0, 16)}...`);
+                    // Cache the fact that no profile exists
+                    cache[npub] = {
+                        cached_at: now,
+                        data: null
+                    };
+                    saveProfileCache(cache);
                     return null;
                 }
 
@@ -2399,7 +2542,6 @@
                 const content = JSON.parse(contentJson);
 
                 const metadata = {
-                    cached_at: now,
                     name: content.name || null,
                     display_name: content.display_name || null,
                     picture: content.picture || null,
@@ -2407,8 +2549,11 @@
                     nip05: content.nip05 || null
                 };
 
-                // Update cache
-                cache[npub] = metadata;
+                // Update cache with metadata object
+                cache[npub] = {
+                    cached_at: now,
+                    data: metadata
+                };
                 saveProfileCache(cache);
 
                 return metadata;
@@ -2458,15 +2603,17 @@
                 // Publish via Rust function
                 await publish_profile_metadata(JSON.stringify(metadata));
 
-                // Update cache immediately
+                // Update cache immediately with new structure
                 const cache = getProfileCache();
                 cache[ourNpub] = {
                     cached_at: Math.floor(Date.now() / 1000),
-                    name: metadata.name,
-                    display_name: metadata.display_name,
-                    picture: metadata.picture,
-                    about: metadata.about,
-                    nip05: metadata.nip05
+                    data: {
+                        name: metadata.name,
+                        display_name: metadata.display_name,
+                        picture: metadata.picture,
+                        about: metadata.about,
+                        nip05: metadata.nip05
+                    }
                 };
                 saveProfileCache(cache);
 
@@ -2755,6 +2902,7 @@
 
                 // Update balance display
                 await refreshMintBalances();
+                await refreshTransactionHistory();
 
                 // Show success in modal
                 document.getElementById('redemption-status').innerHTML = `<div class="success" style="font-size: 1.2em;">✅ Successfully received ${amount} sats!</div>`;
@@ -2851,6 +2999,7 @@
 
                 // Update balance display
                 await refreshMintBalances();
+                await refreshTransactionHistory();
             } catch (err) {
                 console.error('Failed to create token:', err);
                 statusDiv.innerHTML = `<div class="error">Failed to create token: ${err}</div>`;
@@ -3208,6 +3357,9 @@
 
             // Load mints with balances
             await loadSendEcashChatMintOptions();
+
+            // Load group members for P2PK
+            await loadSendEcashChatRecipients();
         };
 
         window.hideSendEcashInChatModal = function() {
@@ -3239,9 +3391,43 @@
             }
         }
 
+        async function loadSendEcashChatRecipients() {
+            const selectEl = document.getElementById('send-ecash-chat-recipient-select');
+
+            try {
+                const groupsJson = await get_groups();
+                const groups = JSON.parse(groupsJson);
+                const group = groups.find(g => g.id === currentChatGroupId);
+
+                if (!group) {
+                    selectEl.innerHTML = '<option value="">Group not found</option>';
+                    return;
+                }
+
+                const ourNpub = await get_npub();
+
+                // Build options - start with "Anyone"
+                let options = '<option value="">Anyone (not locked)</option>';
+
+                // Add each member (including ourselves)
+                for (const memberNpub of group.member_npubs) {
+                    const displayName = await getDisplayName(memberNpub);
+                    const shortNpub = memberNpub.substring(0, 16) + '...' + memberNpub.substring(memberNpub.length - 8);
+                    const selfMarker = memberNpub === ourNpub ? ' (you)' : '';
+                    options += `<option value="${memberNpub}">${displayName}${selfMarker} (${shortNpub})</option>`;
+                }
+
+                selectEl.innerHTML = options;
+            } catch (err) {
+                console.error('Failed to load recipients:', err);
+                selectEl.innerHTML = '<option value="">Error loading members</option>';
+            }
+        }
+
         window.sendEcashToChat = async function() {
             const amount = parseInt(document.getElementById('send-ecash-chat-amount').value);
             const selectedMint = document.getElementById('send-ecash-chat-mint-select').value;
+            const recipientNpub = document.getElementById('send-ecash-chat-recipient-select').value;
             const statusDiv = document.getElementById('send-ecash-chat-status');
 
             if (!amount || amount <= 0) {
@@ -3259,15 +3445,20 @@
                 return;
             }
 
-            statusDiv.innerHTML = 'Creating token...';
+            console.log('Recipient npub:', recipientNpub);
+            statusDiv.innerHTML = recipientNpub ? 'Creating P2PK token...' : 'Creating token...';
 
             try {
                 // Set selected mint as current
                 const originalMint = await get_current_mint();
                 await set_current_mint(selectedMint);
 
-                // Create token
-                const token = await send_ecash(BigInt(amount));
+                // Create token (with or without P2PK)
+                console.log('About to call send function. recipientNpub:', recipientNpub);
+                const token = recipientNpub
+                    ? await send_ecash_p2pk(BigInt(amount), recipientNpub)
+                    : await send_ecash(BigInt(amount));
+                console.log('Token created:', token.substring(0, 50));
 
                 // Restore original mint
                 await set_current_mint(originalMint);
@@ -3404,6 +3595,16 @@
                 const delResultJson = await fetch_deletions_for_npub(firstMember);
                 const delResult = JSON.parse(delResultJson);
 
+                // Calculate which KeyPackages are deleted
+                const deletedIds = new Set();
+                if (delResult.deletions) {
+                    delResult.deletions.forEach(del => {
+                        if (del.references) {
+                            del.references.forEach(ref => deletedIds.add(ref));
+                        }
+                    });
+                }
+
                 // Add deletions section
                 if (delResult.deletions && delResult.deletions.length > 0) {
                     html += '<div style="background: #fff3cd; border-radius: 8px; padding: 20px; margin-bottom: 20px;">';
@@ -3425,92 +3626,76 @@
                     html += '</div>';
                 }
                 detailsContent.innerHTML = html;
-                statusMessage.textContent = 'Step 3: Creating group and sending Welcome message...';
 
-                // Step 3: Actually create the group
+                // Select the most recent non-deleted KeyPackage
+                const availableKeyPackages = kpResult.keypackages.filter(kp => !deletedIds.has(kp.event_id));
+                if (availableKeyPackages.length === 0) {
+                    throw new Error('No available KeyPackages found for this user');
+                }
+                const selectedKeyPackage = availableKeyPackages[0]; // Most recent
+                const selectedKeyPackageId = selectedKeyPackage.event_id;
+
+                // Step 3: Create group and publish
+                statusMessage.textContent = 'Step 3: Creating group...';
                 const isAdmin = document.getElementById('create-group-first-member-admin').checked;
                 console.log(`Creating group "${name}" with first member: ${firstMember.substring(0, 16)}... (admin: ${isAdmin})`);
-                const members = [{ npub: firstMember, is_admin: isAdmin }];
-                const resultJson = await create_group_with_members(name, description, JSON.stringify(members));
-                const result = JSON.parse(resultJson);
 
-                // Show final result with selected KeyPackage
-                // Calculate deleted IDs
-                const deletedIds = new Set();
-                if (delResult.deletions) {
-                    delResult.deletions.forEach(del => {
-                        if (del.references) {
-                            del.references.forEach(ref => deletedIds.add(ref));
-                        }
+                const createResultJson = await create_group_and_publish(
+                    name,
+                    description,
+                    JSON.stringify([selectedKeyPackageId]),
+                    JSON.stringify([firstMember]),
+                    JSON.stringify([isAdmin])
+                );
+                const createResult = JSON.parse(createResultJson);
+
+                // Show group creation result
+                html += '<div style="background: #e7f3ff; border-radius: 8px; padding: 20px; margin-bottom: 20px;">';
+                html += '<h3 style="margin-top: 0; color: #0066cc;">✅ Step 3: Group Created</h3>';
+                html += `<p style="margin: 10px 0;"><strong>Group Name:</strong> ${createResult.group_name}</p>`;
+                html += `<p style="margin: 10px 0;"><strong>Group ID:</strong> <span style="font-family: monospace; font-size: 0.85em;">${createResult.group_id.substring(0, 16)}...</span></p>`;
+                html += `<p style="margin: 10px 0;"><strong>Selected KeyPackage:</strong> <span style="font-family: monospace; font-size: 0.85em;">${selectedKeyPackageId.substring(0, 16)}...</span></p>`;
+                html += '</div>';
+                detailsContent.innerHTML = html;
+
+                // Step 4: Publish Welcome message
+                statusMessage.textContent = 'Step 4: Publishing Welcome message...';
+                const welcomeResultJson = await publish_welcome_message(JSON.stringify(createResult.welcome_rumors), firstMember);
+                const welcomeResult = JSON.parse(welcomeResultJson);
+
+                // Show Welcome message relay results
+                html += '<div style="background: #fff4e6; border-radius: 8px; padding: 20px; margin-bottom: 20px;">';
+                html += '<h3 style="margin-top: 0; color: #ff8c00;">📬 Step 4: Welcome Message Published</h3>';
+                html += `<p style="margin: 10px 0;"><strong>Event ID:</strong> <span style="font-family: monospace; font-size: 0.85em;">${welcomeResult.welcome_event_id.substring(0, 16)}...</span></p>`;
+                if (welcomeResult.relays_success && welcomeResult.relays_success.length > 0) {
+                    html += `<p style="margin: 10px 0; color: #28a745;"><strong>✅ Success:</strong> ${welcomeResult.relays_success.length} relay(s)</p>`;
+                    html += '<div style="margin-left: 20px; font-size: 0.9em;">';
+                    welcomeResult.relays_success.forEach(relay => {
+                        html += `<div style="color: #666;">• ${relay}</div>`;
                     });
+                    html += '</div>';
                 }
-
-                // Show which KeyPackage was selected from the invitations
-                const selectedKP = result.invitations && result.invitations.length > 0
-                    ? result.invitations[0].keypackage_event_id
-                    : null;
-
-                const availableCount = kpResult.keypackages.filter(kp => !deletedIds.has(kp.event_id)).length;
-                html = '<div style="background: #f8f9fa; border-radius: 8px; padding: 20px; margin-bottom: 20px;">';
-                html += `<h3 style="margin-top: 0; color: #0066cc;">📦 KeyPackages for ${firstMember.substring(0, 16)}...</h3>`;
-                html += `<p style="margin: 10px 0;"><strong>Total found:</strong> ${kpResult.total_found}</p>`;
-                html += `<p style="margin: 10px 0;"><strong>Deleted:</strong> ${deletedIds.size}</p>`;
-                html += `<p style="margin: 10px 0;"><strong>Available:</strong> ${availableCount}</p>`;
-
-                if (kpResult.keypackages && kpResult.keypackages.length > 0) {
-                    html += '<div style="margin-top: 15px;"><strong>All KeyPackages:</strong></div>';
-                    html += '<div style="max-height: 200px; overflow-y: auto; margin-top: 10px;">';
-                    kpResult.keypackages.forEach(kp => {
-                        const isDeleted = deletedIds.has(kp.event_id);
-                        const isSelected = selectedKP && kp.event_id === selectedKP;
-                        const icon = isDeleted ? '❌' : (isSelected ? '✅' : '📦');
-                        const color = isDeleted ? '#dc3545' : (isSelected ? '#28a745' : '#666');
-                        const label = isSelected ? ' (SELECTED)' : '';
-                        const date = new Date(kp.created_at * 1000).toLocaleString();
-                        html += `
-                            <div style="padding: 8px; border-bottom: 1px solid #ddd; font-size: 0.9em;">
-                                <div style="display: flex; align-items: center;">
-                                    <span style="font-size: 16px; margin-right: 8px;">${icon}</span>
-                                    <div style="flex: 1;">
-                                        <div style="font-family: monospace; color: ${color};">${kp.event_id.substring(0, 16)}...${label}</div>
-                                        <div style="font-size: 0.85em; color: #666;">${date}</div>
-                                    </div>
-                                </div>
-                            </div>
-                        `;
+                if (welcomeResult.relays_failed && welcomeResult.relays_failed.length > 0) {
+                    html += `<p style="margin: 10px 0; color: #dc3545;"><strong>❌ Failed:</strong> ${welcomeResult.relays_failed.length} relay(s)</p>`;
+                    html += '<div style="margin-left: 20px; font-size: 0.9em;">';
+                    welcomeResult.relays_failed.forEach(fail => {
+                        html += `<div style="color: #dc3545;">• ${fail.url}: ${fail.error}</div>`;
                     });
                     html += '</div>';
                 }
                 html += '</div>';
-
-                // Re-add deletions
-                if (delResult.deletions && delResult.deletions.length > 0) {
-                    html += '<div style="background: #fff3cd; border-radius: 8px; padding: 20px; margin-bottom: 20px;">';
-                    html += '<h3 style="margin-top: 0; color: #856404;">🗑️ Deletion Events (Kind 5)</h3>';
-                    html += `<p style="margin: 10px 0;"><strong>Total found:</strong> ${delResult.total_found}</p>`;
-                    html += '<div style="max-height: 200px; overflow-y: auto; margin-top: 10px;">';
-                    delResult.deletions.forEach(del => {
-                        const date = new Date(del.created_at * 1000).toLocaleString();
-                        html += `
-                            <div style="padding: 8px; border-bottom: 1px solid #e0e0e0; font-size: 0.9em;">
-                                <div style="font-size: 0.85em; color: #666; margin-bottom: 4px;">${date}</div>
-                                ${del.references && del.references.length > 0 ?
-                                    `<div style="font-size: 0.9em; color: #856404;">Deletes KP: ${del.references.map(r => r.substring(0, 16) + '...').join(', ')}</div>`
-                                    : ''}
-                            </div>
-                        `;
-                    });
-                    html += '</div>';
-                    html += '</div>';
-                }
+                detailsContent.innerHTML = html;
 
                 // Success section
                 html += '<div style="background: #d4edda; border-radius: 8px; padding: 20px;">';
                 html += '<h3 style="margin-top: 0; color: #155724;">✅ Group Created Successfully!</h3>';
                 html += `<p style="margin: 10px 0;"><strong>Group Name:</strong> ${name}</p>`;
                 html += `<p style="margin: 10px 0;"><strong>First Member:</strong> ${firstMember.substring(0, 20)}...</p>`;
-                if (selectedKP) {
-                    html += `<p style="margin: 10px 0;"><strong>Selected KeyPackage ID:</strong> <span style="font-family: monospace; font-size: 0.85em;">${selectedKP.substring(0, 16)}...</span></p>`;
+                html += `<p style="margin: 10px 0;"><strong>Selected KeyPackage ID:</strong> <span style="font-family: monospace; font-size: 0.85em;">${selectedKeyPackageId.substring(0, 16)}...</span></p>`;
+                if (isAdmin) {
+                    html += '<p style="margin: 10px 0;"><strong>First Member Role:</strong> Admin 👑</p>';
+                } else {
+                    html += '<p style="margin: 10px 0;"><strong>First Member Role:</strong> Member</p>';
                 }
                 html += '</div>';
 
@@ -3553,6 +3738,76 @@
         window.closeInviteModal = function() {
             document.getElementById('invite-member-modal').style.display = 'none';
             currentGroupIdForInvite = null;
+        };
+
+        // QR Scanner for Create Group
+        let createGroupQrScanner = null;
+        window.scanQRForCreateGroup = function() {
+            const container = document.getElementById('create-group-qr-scanner');
+            container.style.display = 'block';
+
+            createGroupQrScanner = new Html5Qrcode("create-group-qr-reader");
+            createGroupQrScanner.start(
+                { facingMode: "environment" },
+                { fps: 10, qrbox: 250 },
+                (decodedText) => {
+                    if (decodedText.startsWith('npub1')) {
+                        document.getElementById('create-group-first-member').value = decodedText;
+                        closeCreateGroupQRScanner();
+                    }
+                },
+                (errorMessage) => {
+                    // Ignore errors (no QR code in frame)
+                }
+            ).catch(err => {
+                console.error('QR scanner error:', err);
+                alert('Failed to start camera: ' + err);
+            });
+        };
+
+        window.closeCreateGroupQRScanner = function() {
+            if (createGroupQrScanner) {
+                createGroupQrScanner.stop().then(() => {
+                    createGroupQrScanner.clear();
+                    createGroupQrScanner = null;
+                }).catch(err => console.error('Failed to stop scanner:', err));
+            }
+            document.getElementById('create-group-qr-scanner').style.display = 'none';
+        };
+
+        // QR Scanner for Invite Member
+        let inviteQrScanner = null;
+        window.scanQRForInvite = function() {
+            const container = document.getElementById('invite-qr-scanner');
+            container.style.display = 'block';
+
+            inviteQrScanner = new Html5Qrcode("invite-qr-reader");
+            inviteQrScanner.start(
+                { facingMode: "environment" },
+                { fps: 10, qrbox: 250 },
+                (decodedText) => {
+                    if (decodedText.startsWith('npub1')) {
+                        document.getElementById('invite-member-npub').value = decodedText;
+                        closeInviteQRScanner();
+                    }
+                },
+                (errorMessage) => {
+                    // Ignore errors (no QR code in frame)
+                }
+            ).catch(err => {
+                console.error('QR scanner error:', err);
+                alert('Failed to start camera: ' + err);
+            });
+        };
+
+        window.closeInviteQRScanner = function() {
+            if (inviteQrScanner) {
+                inviteQrScanner.stop().then(() => {
+                    inviteQrScanner.clear();
+                    inviteQrScanner = null;
+                }).catch(err => console.error('Failed to stop scanner:', err));
+            }
+            document.getElementById('invite-qr-scanner').style.display = 'none';
         };
 
         // Close invite details modal
@@ -3799,74 +4054,111 @@
                     html += '</div>';
                 }
                 detailsContent.innerHTML = html;
-                statusMessage.textContent = 'Step 3: Sending invitation to group...';
 
-                // Step 3: Actually send the invitation
-                const isAdmin = document.getElementById('invite-member-admin').checked;
-                console.log(`Inviting ${npub.substring(0, 16)}... to group (admin: ${isAdmin})`);
-                const resultJson = await invite_member_to_group(currentGroupIdForInvite, npub, isAdmin);
-                const result = JSON.parse(resultJson);
+                // Select the most recent non-deleted KeyPackage
+                const availableKeyPackages = kpResult.keypackages.filter(kp => !deletedIds.has(kp.event_id));
+                if (availableKeyPackages.length === 0) {
+                    throw new Error('No available KeyPackages found for this user');
+                }
+                const selectedKeyPackage = availableKeyPackages[0]; // Most recent
+                const selectedKeyPackageId = selectedKeyPackage.event_id;
 
-                // Update KeyPackages section to show selected one
-                html = '<div style="background: #f8f9fa; border-radius: 8px; padding: 20px; margin-bottom: 20px;">';
-                html += '<h3 style="margin-top: 0; color: #0066cc;">📦 KeyPackages Found</h3>';
-                html += `<p style="margin: 10px 0;"><strong>Total found:</strong> ${result.keypackages.total_found}</p>`;
-                html += `<p style="margin: 10px 0;"><strong>Deleted:</strong> ${result.keypackages.deleted_count}</p>`;
-                html += `<p style="margin: 10px 0;"><strong>Available:</strong> ${result.keypackages.available_count}</p>`;
+                // Step 3: Add member and publish evolution event
+                statusMessage.textContent = 'Step 3: Adding member and publishing evolution event...';
+                const addResultJson = await add_member_and_publish(currentGroupIdForInvite, selectedKeyPackageId, npub);
+                const addResult = JSON.parse(addResultJson);
 
-                if (result.keypackages.all_keypackages && result.keypackages.all_keypackages.length > 0) {
-                    html += '<div style="margin-top: 15px;"><strong>All KeyPackages:</strong></div>';
-                    html += '<div style="max-height: 200px; overflow-y: auto; margin-top: 10px;">';
-                    result.keypackages.all_keypackages.forEach(kp => {
-                        const isSelected = kp.event_id === result.keypackages.selected_keypackage_id;
-                        const icon = kp.deleted ? '❌' : (isSelected ? '✅' : '📦');
-                        const color = kp.deleted ? '#dc3545' : (isSelected ? '#28a745' : '#666');
-                        const label = isSelected ? ' (SELECTED)' : '';
-                        const date = new Date(kp.created_at * 1000).toLocaleString();
-
-                        html += `
-                            <div style="padding: 8px; border-bottom: 1px solid #ddd; font-size: 0.9em;">
-                                <div style="display: flex; align-items: center;">
-                                    <span style="font-size: 16px; margin-right: 8px;">${icon}</span>
-                                    <div style="flex: 1;">
-                                        <div style="font-family: monospace; color: ${color};">${kp.event_id.substring(0, 16)}...${label}</div>
-                                        <div style="font-size: 0.85em; color: #666;">${date}</div>
-                                    </div>
-                                </div>
-                            </div>
-                        `;
+                // Show evolution event relay results
+                html += '<div style="background: #e7f3ff; border-radius: 8px; padding: 20px; margin-bottom: 20px;">';
+                html += '<h3 style="margin-top: 0; color: #0066cc;">📤 Step 3: Evolution Event Published</h3>';
+                html += `<p style="margin: 10px 0;"><strong>Selected KeyPackage:</strong> <span style="font-family: monospace; font-size: 0.85em;">${selectedKeyPackageId.substring(0, 16)}...</span></p>`;
+                if (addResult.evolution_relays_success && addResult.evolution_relays_success.length > 0) {
+                    html += `<p style="margin: 10px 0; color: #28a745;"><strong>✅ Success:</strong> ${addResult.evolution_relays_success.length} relay(s)</p>`;
+                    html += '<div style="margin-left: 20px; font-size: 0.9em;">';
+                    addResult.evolution_relays_success.forEach(relay => {
+                        html += `<div style="color: #666;">• ${relay}</div>`;
+                    });
+                    html += '</div>';
+                }
+                if (addResult.evolution_relays_failed && addResult.evolution_relays_failed.length > 0) {
+                    html += `<p style="margin: 10px 0; color: #dc3545;"><strong>❌ Failed:</strong> ${addResult.evolution_relays_failed.length} relay(s)</p>`;
+                    html += '<div style="margin-left: 20px; font-size: 0.9em;">';
+                    addResult.evolution_relays_failed.forEach(fail => {
+                        html += `<div style="color: #dc3545;">• ${fail.url}: ${fail.error}</div>`;
                     });
                     html += '</div>';
                 }
                 html += '</div>';
+                detailsContent.innerHTML = html;
 
-                // Re-add deletions section (already present)
-                if (result.deletions && result.deletions.length > 0) {
-                    html += '<div style="background: #fff3cd; border-radius: 8px; padding: 20px; margin-bottom: 20px;">';
-                    html += '<h3 style="margin-top: 0; color: #856404;">🗑️ Deletion Events (Kind 5)</h3>';
-                    html += `<p style="margin: 10px 0;"><strong>Total found:</strong> ${result.deletions.length}</p>`;
-                    html += '<div style="max-height: 200px; overflow-y: auto; margin-top: 10px;">';
-                    result.deletions.forEach(del => {
-                        const date = new Date(del.created_at * 1000).toLocaleString();
-                        html += `
-                            <div style="padding: 8px; border-bottom: 1px solid #e0e0e0; font-size: 0.9em;">
-                                <div style="font-size: 0.85em; color: #666; margin-bottom: 4px;">${date}</div>
-                                ${del.references && del.references.length > 0 ?
-                                    `<div style="font-size: 0.9em; color: #856404;">Deletes KP: ${del.references.map(r => r.substring(0, 16) + '...').join(', ')}</div>`
-                                    : ''}
-                            </div>
-                        `;
+                // Step 4: Publish Welcome message
+                statusMessage.textContent = 'Step 4: Publishing Welcome message...';
+                const welcomeResultJson = await publish_welcome_message(addResult.welcome_rumors, npub);
+                const welcomeResult = JSON.parse(welcomeResultJson);
+
+                // Show Welcome message relay results
+                html += '<div style="background: #fff4e6; border-radius: 8px; padding: 20px; margin-bottom: 20px;">';
+                html += '<h3 style="margin-top: 0; color: #ff8c00;">📬 Step 4: Welcome Message Published</h3>';
+                html += `<p style="margin: 10px 0;"><strong>Event ID:</strong> <span style="font-family: monospace; font-size: 0.85em;">${welcomeResult.welcome_event_id.substring(0, 16)}...</span></p>`;
+                if (welcomeResult.relays_success && welcomeResult.relays_success.length > 0) {
+                    html += `<p style="margin: 10px 0; color: #28a745;"><strong>✅ Success:</strong> ${welcomeResult.relays_success.length} relay(s)</p>`;
+                    html += '<div style="margin-left: 20px; font-size: 0.9em;">';
+                    welcomeResult.relays_success.forEach(relay => {
+                        html += `<div style="color: #666;">• ${relay}</div>`;
                     });
                     html += '</div>';
+                }
+                if (welcomeResult.relays_failed && welcomeResult.relays_failed.length > 0) {
+                    html += `<p style="margin: 10px 0; color: #dc3545;"><strong>❌ Failed:</strong> ${welcomeResult.relays_failed.length} relay(s)</p>`;
+                    html += '<div style="margin-left: 20px; font-size: 0.9em;">';
+                    welcomeResult.relays_failed.forEach(fail => {
+                        html += `<div style="color: #dc3545;">• ${fail.url}: ${fail.error}</div>`;
+                    });
                     html += '</div>';
+                }
+                html += '</div>';
+                detailsContent.innerHTML = html;
+
+                // Step 5: Promote to admin (if checkbox is checked)
+                const isAdmin = document.getElementById('invite-member-admin').checked;
+                if (isAdmin) {
+                    statusMessage.textContent = 'Step 5: Promoting to admin...';
+                    const adminResultJson = await promote_to_admin_and_publish(currentGroupIdForInvite, npub);
+                    const adminResult = JSON.parse(adminResultJson);
+
+                    // Show admin promotion relay results
+                    html += '<div style="background: #f3e5f5; border-radius: 8px; padding: 20px; margin-bottom: 20px;">';
+                    html += '<h3 style="margin-top: 0; color: #7b1fa2;">👑 Step 5: Admin Promotion Published</h3>';
+                    if (adminResult.relays_success && adminResult.relays_success.length > 0) {
+                        html += `<p style="margin: 10px 0; color: #28a745;"><strong>✅ Success:</strong> ${adminResult.relays_success.length} relay(s)</p>`;
+                        html += '<div style="margin-left: 20px; font-size: 0.9em;">';
+                        adminResult.relays_success.forEach(relay => {
+                            html += `<div style="color: #666;">• ${relay}</div>`;
+                        });
+                        html += '</div>';
+                    }
+                    if (adminResult.relays_failed && adminResult.relays_failed.length > 0) {
+                        html += `<p style="margin: 10px 0; color: #dc3545;"><strong>❌ Failed:</strong> ${adminResult.relays_failed.length} relay(s)</p>`;
+                        html += '<div style="margin-left: 20px; font-size: 0.9em;">';
+                        adminResult.relays_failed.forEach(fail => {
+                            html += `<div style="color: #dc3545;">• ${fail.url}: ${fail.error}</div>`;
+                        });
+                        html += '</div>';
+                    }
+                    html += '</div>';
+                    detailsContent.innerHTML = html;
                 }
 
                 // Success section
                 html += '<div style="background: #d4edda; border-radius: 8px; padding: 20px;">';
-                html += '<h3 style="margin-top: 0; color: #155724;">✅ Invitation Sent</h3>';
-                html += `<p style="margin: 10px 0;"><strong>Invitee:</strong> ${result.invitee_npub.substring(0, 20)}...</p>`;
-                html += `<p style="margin: 10px 0;"><strong>Group:</strong> ${result.group_name}</p>`;
-                html += `<p style="margin: 10px 0;"><strong>Selected KeyPackage ID:</strong> <span style="font-family: monospace; font-size: 0.85em;">${result.keypackages.selected_keypackage_id.substring(0, 16)}...</span></p>`;
+                html += '<h3 style="margin-top: 0; color: #155724;">✅ Invitation Completed Successfully</h3>';
+                html += `<p style="margin: 10px 0;"><strong>Invitee:</strong> ${npub.substring(0, 20)}...</p>`;
+                html += `<p style="margin: 10px 0;"><strong>Selected KeyPackage ID:</strong> <span style="font-family: monospace; font-size: 0.85em;">${selectedKeyPackageId.substring(0, 16)}...</span></p>`;
+                if (isAdmin) {
+                    html += '<p style="margin: 10px 0;"><strong>Role:</strong> Admin 👑</p>';
+                } else {
+                    html += '<p style="margin: 10px 0;"><strong>Role:</strong> Member</p>';
+                }
                 html += '</div>';
 
                 detailsContent.innerHTML = html;

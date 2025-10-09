@@ -28,6 +28,29 @@ use mdk_storage_traits::GroupId;
 static STORAGE_CACHE: Lazy<TokioMutex<Option<Arc<MdkHybridStorage>>>> =
     Lazy::new(|| TokioMutex::new(None));
 
+/// Global wallet database - singleton loaded once per browser session
+/// This database is shared by ALL wallet instances (across all mints)
+static WALLET_DB: Lazy<TokioMutex<Option<HybridWalletDatabase>>> =
+    Lazy::new(|| TokioMutex::new(None));
+
+/// Get or create the singleton wallet database
+/// Returns a clone (cheap - Arc internally) that shares the same state
+async fn get_or_create_wallet_db() -> Result<HybridWalletDatabase, JsValue> {
+    let mut cache = WALLET_DB.lock().await;
+
+    if let Some(db) = cache.as_ref() {
+        // Return a clone (cheap - just clones the Arc pointer)
+        return Ok(db.clone());
+    }
+
+    // First access this session - load from localStorage
+    log("📦 Loading wallet database from localStorage (first access this session)");
+    let db = HybridWalletDatabase::new().await?;
+    *cache = Some(db.clone());
+    log("✅ Wallet database cached for session");
+    Ok(db)
+}
+
 /// Get or create cached storage instance (Arc-wrapped for sharing)
 async fn get_or_create_storage() -> Result<SharedMdkStorage, JsValue> {
     let mut cache = STORAGE_CACHE.lock().await;
@@ -137,8 +160,8 @@ async fn create_wallet_for_mint(mint_url_str: String) -> Result<Wallet, JsValue>
     let mint_url = MintUrl::from_str(&mint_url_str)
         .map_err(|e| JsValue::from_str(&format!("Invalid mint URL: {}", e)))?;
 
-    // Create hybrid database (loads from localStorage - shared across all mints)
-    let db = HybridWalletDatabase::new().await?;
+    // Get singleton database (shared across all mints and all wallet instances)
+    let db = get_or_create_wallet_db().await?;
 
     // Build wallet
     let wallet = WalletBuilder::new()
@@ -173,8 +196,8 @@ async fn create_wallet() -> Result<Wallet, JsValue> {
     let mint_url = MintUrl::from_str(&mint_url_str)
         .map_err(|e| JsValue::from_str(&format!("Invalid mint URL: {}", e)))?;
 
-    // Create hybrid database (loads from localStorage)
-    let db = HybridWalletDatabase::new().await?;
+    // Get singleton database (shared across all mints and all wallet instances)
+    let db = get_or_create_wallet_db().await?;
 
     // Build wallet
     let wallet = WalletBuilder::new()
@@ -727,6 +750,62 @@ pub fn get_balance() -> js_sys::Promise {
     })
 }
 
+/// Get transaction history from wallet database
+/// Returns a Promise that resolves to JSON array of transaction objects
+/// Sorted by most recent first
+#[wasm_bindgen]
+pub fn get_transaction_history() -> js_sys::Promise {
+    future_to_promise(async move {
+        let result = async {
+            use cdk_common::database::WalletDatabase;
+
+            log("Fetching transaction history...");
+
+            // Get singleton database to access transactions
+            let db = get_or_create_wallet_db().await?;
+
+            // Get all transactions (no filters)
+            let mut transactions = db.list_transactions(None, None, None)
+                .await
+                .map_err(|e| JsValue::from_str(&format!("Failed to get transactions: {}", e)))?;
+
+            // Sort by timestamp (most recent first)
+            transactions.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+
+            // Convert to JSON
+            #[derive(Serialize)]
+            struct TransactionInfo {
+                amount: u64,
+                direction: String,
+                mint: String,
+                timestamp: u64,
+                unit: String,
+            }
+
+            let tx_infos: Vec<TransactionInfo> = transactions
+                .into_iter()
+                .map(|tx| TransactionInfo {
+                    amount: u64::from(tx.amount),
+                    direction: format!("{:?}", tx.direction),
+                    mint: tx.mint_url.to_string(),
+                    timestamp: tx.timestamp,
+                    unit: format!("{:?}", tx.unit),
+                })
+                .collect();
+
+            let json = serde_json::to_string(&tx_infos)
+                .map_err(|e| JsValue::from_str(&format!("Failed to serialize: {}", e)))?;
+
+            log(&format!("Found {} transactions", tx_infos.len()));
+
+            Ok::<String, JsValue>(json)
+        }
+        .await;
+
+        result.map(|json| JsValue::from_str(&json))
+    })
+}
+
 /// Get balances for all mints in the wallet database
 /// Returns a Promise that resolves to JSON array of {mint: string, balance: number, is_trusted: bool}
 /// Sorted by descending balance
@@ -740,8 +819,8 @@ pub fn get_all_mint_balances() -> js_sys::Promise {
 
             log("Fetching balances for all mints...");
 
-            // Create database to access proofs
-            let db = HybridWalletDatabase::new().await?;
+            // Get singleton database to access proofs
+            let db = get_or_create_wallet_db().await?;
 
             // Get all unspent proofs (State::Unspent)
             let proofs = db.get_proofs(None, Some(CurrencyUnit::Sat), Some(vec![State::Unspent]), None)
@@ -813,18 +892,74 @@ pub fn parse_token_info(token_str: String) -> js_sys::Promise {
             let mint_str = mint_url.to_string();
             let is_trusted = is_mint_trusted(mint_str.clone())?;
 
+            // Extract secret kind and data from token
+            let mut secret_kind: Option<String> = None;
+            let mut secret_data: Option<String> = None;
+            let mut secret_npub: Option<String> = None;
+
+            // Get proofs from the token to check secret kind
+            if let Ok(proofs) = token.proofs(&[]) {
+                if let Some(first_proof) = proofs.first() {
+                    // The secret is a JSON array like ["P2PK", {"data": "...", ...}] or just a plain string
+                    let secret_str = first_proof.secret.to_string();
+
+                    // Try to parse as JSON array
+                    if let Ok(secret_json) = serde_json::from_str::<serde_json::Value>(&secret_str) {
+                        if let Some(arr) = secret_json.as_array() {
+                            if let Some(first_elem) = arr.first() {
+                                if let Some(kind_str) = first_elem.as_str() {
+                                    secret_kind = Some(kind_str.to_string());
+                                }
+                            }
+                            // If kind is P2PK, extract data from second element
+                            if secret_kind.as_deref() == Some("P2PK") && arr.len() >= 2 {
+                                if let Some(data_obj) = arr[1].as_object() {
+                                    if let Some(data_val) = data_obj.get("data") {
+                                        if let Some(data_str) = data_val.as_str() {
+                                            secret_data = Some(data_str.to_string());
+
+                                            // Try to convert hex pubkey to npub
+                                            if let Ok(pubkey_bytes) = hex::decode(data_str) {
+                                                if pubkey_bytes.len() == 33 {
+                                                    // Convert compressed secp256k1 pubkey to x-only (Nostr format)
+                                                    if let Ok(secp_pk) = nostr::secp256k1::PublicKey::from_slice(&pubkey_bytes) {
+                                                        let (x_only, _parity) = secp_pk.x_only_public_key();
+                                                        if let Ok(nostr_pk) = nostr::PublicKey::from_slice(x_only.serialize().as_ref()) {
+                                                            secret_npub = Some(nostr_pk.to_bech32().unwrap());
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             // Create JSON response
             #[derive(Serialize)]
             struct TokenInfo {
                 amount: u64,
                 mint: String,
                 is_trusted: bool,
+                #[serde(skip_serializing_if = "Option::is_none")]
+                secret_kind: Option<String>,
+                #[serde(skip_serializing_if = "Option::is_none")]
+                secret_data: Option<String>,
+                #[serde(skip_serializing_if = "Option::is_none")]
+                secret_npub: Option<String>,
             }
 
             let info = TokenInfo {
                 amount: u64::from(amount),
                 mint: mint_str,
                 is_trusted,
+                secret_kind,
+                secret_data,
+                secret_npub,
             };
 
             let json = serde_json::to_string(&info)
@@ -875,9 +1010,96 @@ pub fn send_ecash(amount: u64) -> js_sys::Promise {
     })
 }
 
+/// Send ecash with P2PK - creates a token locked to recipient's public key
+/// Returns the token string
+#[wasm_bindgen]
+pub fn send_ecash_p2pk(amount: u64, recipient_npub: String) -> js_sys::Promise {
+    future_to_promise(async move {
+        let result = async {
+            use cdk::wallet::SendOptions;
+            use cdk::nuts::SpendingConditions;
+
+            log(&format!("Creating P2PK token for {} sats to {}", amount, &recipient_npub[..16]));
+
+            // Parse recipient npub to get public key
+            let recipient_pubkey = nostr::PublicKey::from_bech32(&recipient_npub)
+                .map_err(|e| JsValue::from_str(&format!("Invalid npub: {}", e)))?;
+
+            // Convert Nostr pubkey (32 bytes) to secp256k1 compressed format (33 bytes)
+            // Nostr uses x-only pubkeys, we need to convert to full secp256k1 pubkey
+            let pubkey_bytes = recipient_pubkey.to_bytes();
+
+            // Create secp256k1 XOnlyPublicKey from the 32-byte Nostr pubkey
+            use nostr::secp256k1::{XOnlyPublicKey, Secp256k1};
+            let secp = Secp256k1::new();
+            let x_only = XOnlyPublicKey::from_slice(&pubkey_bytes)
+                .map_err(|e| JsValue::from_str(&format!("Failed to parse x-only pubkey: {}", e)))?;
+
+            // Convert to full public key (assumes even parity, which is standard for Nostr)
+            let full_pubkey = nostr::secp256k1::PublicKey::from_x_only_public_key(x_only, nostr::secp256k1::Parity::Even);
+
+            // Serialize to compressed format (33 bytes)
+            let compressed_bytes = full_pubkey.serialize();
+
+            // Convert to CDK PublicKey
+            let p2pk_pubkey = cdk::nuts::PublicKey::from_slice(&compressed_bytes)
+                .map_err(|e| JsValue::from_str(&format!("Failed to convert pubkey: {}", e)))?;
+
+            // Create P2PK spending conditions
+            let spending_conditions = SpendingConditions::new_p2pk(p2pk_pubkey, None);
+
+            // Create wallet (uses current mint)
+            let wallet = create_wallet().await?;
+
+            // For P2PK, we must swap ALL proofs to apply the spending conditions
+            // Using prepare_send doesn't work because it may send proofs directly without swapping
+            // So we use swap_from_unspent directly
+            log("Swapping from unspent with P2PK conditions...");
+            let proofs = wallet
+                .swap_from_unspent(
+                    cdk::Amount::from(amount),
+                    Some(spending_conditions),
+                    false,  // include_fees
+                )
+                .await
+                .map_err(|e| JsValue::from_str(&format!("Failed to swap with P2PK: {}", e)))?;
+
+            // Create token from the swapped proofs
+            use cdk::nuts::Token;
+            let token = Token::new(
+                wallet.mint_url.clone(),
+                proofs,
+                None,  // memo
+                wallet.unit.clone(),
+            );
+
+            let token_str = token.to_string();
+
+            // Verify the token has P2PK by checking the first proof's secret
+            if let Ok(proofs) = token.proofs(&[]) {
+                if let Some(first_proof) = proofs.first() {
+                    let secret_str = first_proof.secret.to_string();
+                    log(&format!("Token secret: {}", secret_str));
+                    if !secret_str.contains("P2PK") {
+                        log("⚠️ WARNING: Token does not contain P2PK in secret!");
+                    }
+                }
+            }
+
+            log(&format!("✅ Created P2PK token: {} sats locked to {}", amount, &recipient_npub[..16]));
+
+            Ok::<String, JsValue>(token_str)
+        }
+        .await;
+
+        result.map(|token| JsValue::from_str(&token))
+    })
+}
+
 /// Receive ecash token
 /// Returns a Promise that resolves to the amount received
 /// Creates a wallet for the token's mint (not the current mint)
+/// Automatically handles P2PK tokens by signing with the user's Nostr key
 #[wasm_bindgen]
 pub fn receive_token(token_str: String) -> js_sys::Promise {
     future_to_promise(async move {
@@ -893,12 +1115,31 @@ pub fn receive_token(token_str: String) -> js_sys::Promise {
 
             log(&format!("Token is from mint: {}", token_mint_url));
 
+            // Get Nostr keys for P2PK signing (if token is P2PK-locked)
+            let storage = window().unwrap().local_storage().unwrap().unwrap();
+            let secret_hex = storage.get_item("nostr_secret_key").unwrap()
+                .ok_or_else(|| JsValue::from_str("No Nostr key found. Please generate keys first."))?;
+
+            // Parse secret key from hex
+            let secret_key = SecretKey::from_str(&secret_hex)
+                .map_err(|e| JsValue::from_str(&format!("Invalid secret key: {}", e)))?;
+
+            // Convert Nostr secret key bytes to CDK format
+            let secret_key_bytes = secret_key.as_secret_bytes();
+            let cdk_secret_key = cdk::nuts::SecretKey::from_slice(secret_key_bytes)
+                .map_err(|e| JsValue::from_str(&format!("Failed to convert secret key: {}", e)))?;
+
             // Create wallet for the TOKEN'S mint (not current mint)
             let wallet = create_wallet_for_mint(token_mint_url.to_string()).await?;
 
-            // Receive the token
+            // Receive the token with P2PK signing key
+            let receive_options = ReceiveOptions {
+                p2pk_signing_keys: vec![cdk_secret_key],
+                ..Default::default()
+            };
+
             let amount = wallet
-                .receive(&token_str, ReceiveOptions::default())
+                .receive(&token_str, receive_options)
                 .await
                 .map_err(|e| JsValue::from_str(&format!("Failed to receive token: {}", e)))?;
 
@@ -2079,6 +2320,113 @@ pub fn create_group_with_members(name: String, description: String, member_npubs
     })
 }
 
+/// Create group and publish evolution event
+/// Returns welcome_rumors array, member npubs array, and group_id
+#[wasm_bindgen]
+pub fn create_group_and_publish(name: String, description: String, keypackage_event_ids_json: String, member_npubs_json: String, is_admin_flags_json: String) -> js_sys::Promise {
+    future_to_promise(async move {
+        let result = async {
+            log(&format!("📝 Creating group: {}", name));
+
+            // Parse inputs
+            let keypackage_event_ids: Vec<String> = serde_json::from_str(&keypackage_event_ids_json)
+                .map_err(|e| JsValue::from_str(&format!("Invalid keypackage IDs JSON: {}", e)))?;
+            let member_npubs: Vec<String> = serde_json::from_str(&member_npubs_json)
+                .map_err(|e| JsValue::from_str(&format!("Invalid npubs JSON: {}", e)))?;
+            let is_admin_flags: Vec<bool> = serde_json::from_str(&is_admin_flags_json)
+                .map_err(|e| JsValue::from_str(&format!("Invalid admin flags JSON: {}", e)))?;
+
+            if keypackage_event_ids.len() != member_npubs.len() || member_npubs.len() != is_admin_flags.len() {
+                return Err(JsValue::from_str("Mismatched array lengths"));
+            }
+
+            // Get our keys
+            let keys = get_keys()?;
+            let our_pubkey = keys.public_key();
+
+            // Fetch KeyPackage events by ID
+            let client = create_connected_client().await?;
+            let mut key_package_events = Vec::new();
+            let mut admin_pubkeys = vec![our_pubkey]; // Creator is always admin
+
+            for (i, kp_event_id) in keypackage_event_ids.iter().enumerate() {
+                log(&format!("Fetching KeyPackage {}...", &kp_event_id[..16]));
+
+                let event_id = nostr::EventId::from_hex(kp_event_id)
+                    .map_err(|e| JsValue::from_str(&format!("Invalid event ID: {}", e)))?;
+
+                let filter = nostr::Filter::new().id(event_id);
+                let events = client.fetch_events(filter, Duration::from_secs(10)).await
+                    .map_err(|e| JsValue::from_str(&format!("Failed to fetch KeyPackage: {}", e)))?;
+
+                let kp_event = events.into_iter().next()
+                    .ok_or_else(|| JsValue::from_str(&format!("KeyPackage not found: {}", kp_event_id)))?;
+
+                // Add to admin list if flagged
+                if is_admin_flags[i] {
+                    let member_pubkey = nostr::PublicKey::from_bech32(&member_npubs[i])
+                        .map_err(|e| JsValue::from_str(&format!("Invalid npub: {}", e)))?;
+                    admin_pubkeys.push(member_pubkey);
+                }
+
+                key_package_events.push(kp_event);
+            }
+
+            // Create group config
+            use mdk_core::prelude::*;
+            let relays = get_relays_internal()?;
+            let relay_urls: Vec<RelayUrl> = relays
+                .iter()
+                .filter_map(|r| RelayUrl::parse(r).ok())
+                .collect();
+
+            let config = NostrGroupConfigData::new(
+                name.clone(),
+                description,
+                None, None, None,
+                relay_urls,
+                admin_pubkeys,
+            );
+
+            // Create MDK and create the group
+            log("Creating group with MDK...");
+            let mdk = create_mdk().await?;
+            let group_result = mdk.create_group(&our_pubkey, key_package_events.clone(), config)
+                .map_err(|e| JsValue::from_str(&format!("Failed to create group: {}", e)))?;
+
+            let group_id = hex::encode(group_result.group.mls_group_id.as_slice());
+            log(&format!("✅ Group created! ID: {}", &group_id[..16]));
+
+            // Save state
+            let storage = get_or_create_storage().await?;
+            storage.inner().save_snapshot()
+                .map_err(|e| JsValue::from_str(&format!("Failed to save: {:?}", e)))?;
+            log("✓ State saved to storage");
+
+            // Disconnect
+            let _ = client.disconnect().await;
+
+            // Convert welcome_rumors to JSON strings
+            let welcome_rumors_strings: Vec<String> = group_result.welcome_rumors.iter()
+                .map(|rumor| serde_json::to_string(rumor).unwrap())
+                .collect();
+
+            // Return result
+            let response = serde_json::json!({
+                "group_id": group_id,
+                "group_name": name,
+                "welcome_rumors": welcome_rumors_strings,
+                "member_npubs": member_npubs,
+                "keypackage_event_ids": keypackage_event_ids,
+            });
+
+            Ok::<String, JsValue>(response.to_string())
+        }.await;
+
+        result.map(|json| JsValue::from_str(&json))
+    })
+}
+
 /// Fetch KeyPackages for a given npub (for progressive UI updates)
 #[wasm_bindgen]
 pub fn fetch_keypackages_for_npub(member_npub: String) -> js_sys::Promise {
@@ -2166,9 +2514,265 @@ pub fn fetch_deletions_for_npub(member_npub: String) -> js_sys::Promise {
     })
 }
 
-/// Invite a member to an existing group by their npub
-/// Returns a Promise that resolves when the invite is sent
+/// Step 1: Add member to group and publish evolution event
+/// Returns welcome_rumors and relay status
 #[wasm_bindgen]
+pub fn add_member_and_publish(group_id_hex: String, keypackage_event_id: String, member_npub: String) -> js_sys::Promise {
+    future_to_promise(async move {
+        let result = async {
+            log(&format!("👋 Adding {} to group {}...", &member_npub[..16], &group_id_hex[..16]));
+
+            // Parse npub to get public key
+            let member_pubkey = nostr::PublicKey::from_bech32(&member_npub)
+                .map_err(|e| JsValue::from_str(&format!("Invalid npub: {}", e)))?;
+
+            // Parse group ID
+            let group_id_bytes = hex::decode(&group_id_hex)
+                .map_err(|e| JsValue::from_str(&format!("Invalid group ID: {}", e)))?;
+            let group_id = mdk_core::prelude::GroupId::from_slice(&group_id_bytes);
+
+            // Fetch the specific KeyPackage event by ID
+            log(&format!("Fetching KeyPackage {}...", &keypackage_event_id[..16]));
+            let client = create_connected_client().await?;
+
+            let event_id = nostr::EventId::from_hex(&keypackage_event_id)
+                .map_err(|e| JsValue::from_str(&format!("Invalid event ID: {}", e)))?;
+
+            let filter = nostr::Filter::new()
+                .id(event_id);
+
+            let events = client.fetch_events(filter, Duration::from_secs(10)).await
+                .map_err(|e| JsValue::from_str(&format!("Failed to fetch KeyPackage: {}", e)))?;
+
+            if events.is_empty() {
+                return Err(JsValue::from_str("KeyPackage event not found"));
+            }
+
+            let keypackage_event = events.into_iter().next().unwrap();
+
+            // Get our keys
+            let keys = get_keys()?;
+
+            // Create MDK
+            let mdk = create_mdk().await?;
+
+            // Add member to group (creates MLS commit)
+            log("Creating MLS commit to add member...");
+            let invite_result = mdk.add_members(&group_id, &[keypackage_event.clone()])
+                .map_err(|e| JsValue::from_str(&format!("Failed to add member: {}", e)))?;
+
+            // Merge the commit locally
+            mdk.merge_pending_commit(&group_id)
+                .map_err(|e| JsValue::from_str(&format!("Failed to merge commit: {}", e)))?;
+
+            // Publish evolution event
+            log("Publishing evolution event to relays...");
+            let send_result = client.send_event(&invite_result.evolution_event).await
+                .map_err(|e| JsValue::from_str(&format!("Failed to publish evolution: {}", e)))?;
+
+            let success_relays: Vec<String> = send_result.success.iter().map(|url| url.to_string()).collect();
+            let failed_relays: Vec<_> = send_result.failed.iter()
+                .map(|(url, err)| serde_json::json!({"url": url.to_string(), "error": err.to_string()}))
+                .collect();
+
+            for relay_url in &success_relays {
+                log(&format!("  ✓ {} accepted evolution event", relay_url));
+            }
+            for failed in &failed_relays {
+                log(&format!("  ✗ {} rejected evolution event", failed));
+            }
+
+            // Serialize welcome_rumors for return
+            let welcome_rumors_json = if let Some(welcome_rumors) = &invite_result.welcome_rumors {
+                let rumors: Vec<_> = welcome_rumors.iter().map(|rumor| {
+                    serde_json::to_string(rumor).unwrap_or_default()
+                }).collect();
+                serde_json::to_string(&rumors).unwrap_or_default()
+            } else {
+                "[]".to_string()
+            };
+
+            // Save state
+            let storage = get_or_create_storage().await?;
+            storage.inner().save_snapshot()
+                .map_err(|e| JsValue::from_str(&format!("Failed to save: {:?}", e)))?;
+
+            let _ = client.disconnect().await;
+
+            let response = serde_json::json!({
+                "member_pubkey": member_pubkey.to_hex(),
+                "welcome_rumors": welcome_rumors_json,
+                "evolution_relays_success": success_relays,
+                "evolution_relays_failed": failed_relays,
+            });
+
+            Ok::<String, JsValue>(response.to_string())
+        }
+        .await;
+
+        result.map(|json| JsValue::from_str(&json))
+    })
+}
+
+/// Step 2: Publish Welcome message to relays
+#[wasm_bindgen]
+pub fn publish_welcome_message(welcome_rumors_json: String, member_npub: String) -> js_sys::Promise {
+    future_to_promise(async move {
+        let result = async {
+            log(&format!("📨 Publishing Welcome message to {}...", &member_npub[..16]));
+
+            // Parse member npub
+            let member_pubkey = nostr::PublicKey::from_bech32(&member_npub)
+                .map_err(|e| JsValue::from_str(&format!("Invalid npub: {}", e)))?;
+
+            // Parse welcome_rumors from JSON
+            let rumors_strings: Vec<String> = serde_json::from_str(&welcome_rumors_json)
+                .map_err(|e| JsValue::from_str(&format!("Failed to parse welcome_rumors: {}", e)))?;
+
+            if rumors_strings.is_empty() {
+                return Err(JsValue::from_str("No Welcome rumors to publish"));
+            }
+
+            // Get keys for signing
+            let keys = get_keys()?;
+
+            // Connect to relays
+            let client = create_connected_client().await?;
+
+            let mut welcome_event_id = String::new();
+            let mut all_success_relays = Vec::new();
+            let mut all_failed_relays = Vec::new();
+
+            for rumor_str in rumors_strings {
+                let mut welcome_unsigned: nostr::UnsignedEvent = serde_json::from_str(&rumor_str)
+                    .map_err(|e| JsValue::from_str(&format!("Failed to parse rumor: {}", e)))?;
+
+                // Add p tag with invitee's pubkey
+                welcome_unsigned.tags.push(nostr::Tag::public_key(member_pubkey));
+
+                // Clear and recalculate ID
+                welcome_unsigned.id = None;
+                welcome_unsigned.ensure_id();
+
+                // Sign the Welcome event
+                let welcome_event = welcome_unsigned.sign(&keys).await
+                    .map_err(|e| JsValue::from_str(&format!("Failed to sign Welcome: {}", e)))?;
+
+                welcome_event_id = welcome_event.id.to_hex();
+
+                // Publish to relays
+                let send_result = client.send_event(&welcome_event).await
+                    .map_err(|e| JsValue::from_str(&format!("Failed to send Welcome: {}", e)))?;
+
+                for relay_url in send_result.success.iter() {
+                    log(&format!("  ✓ {} accepted Welcome", relay_url));
+                    all_success_relays.push(relay_url.to_string());
+                }
+                for (relay_url, error) in send_result.failed.iter() {
+                    log(&format!("  ✗ {} rejected Welcome: {}", relay_url, error));
+                    all_failed_relays.push(serde_json::json!({
+                        "url": relay_url.to_string(),
+                        "error": error.to_string()
+                    }));
+                }
+            }
+
+            let _ = client.disconnect().await;
+
+            log(&format!("✅ Welcome sent to {}!", &member_npub[..16]));
+
+            let response = serde_json::json!({
+                "welcome_event_id": welcome_event_id,
+                "relays_success": all_success_relays,
+                "relays_failed": all_failed_relays,
+            });
+
+            Ok::<String, JsValue>(response.to_string())
+        }
+        .await;
+
+        result.map(|json| JsValue::from_str(&json))
+    })
+}
+
+/// Step 3: Promote member to admin and publish
+#[wasm_bindgen]
+pub fn promote_to_admin_and_publish(group_id_hex: String, member_npub: String) -> js_sys::Promise {
+    future_to_promise(async move {
+        let result = async {
+            log(&format!("👑 Promoting {} to admin...", &member_npub[..16]));
+
+            // Parse member npub
+            let member_pubkey = nostr::PublicKey::from_bech32(&member_npub)
+                .map_err(|e| JsValue::from_str(&format!("Invalid npub: {}", e)))?;
+
+            // Parse group ID
+            let group_id_bytes = hex::decode(&group_id_hex)
+                .map_err(|e| JsValue::from_str(&format!("Invalid group ID: {}", e)))?;
+            let group_id = mdk_core::prelude::GroupId::from_slice(&group_id_bytes);
+
+            // Create MDK
+            let mdk = create_mdk().await?;
+
+            // Get current group data
+            let group = mdk.get_group(&group_id)
+                .map_err(|e| JsValue::from_str(&format!("Failed to get group: {}", e)))?
+                .ok_or_else(|| JsValue::from_str("Group not found"))?;
+
+            // Add the new member to admins
+            let mut new_admins: Vec<nostr::PublicKey> = group.admin_pubkeys.into_iter().collect();
+            new_admins.push(member_pubkey);
+
+            // Update group data with new admin list
+            use mdk_core::prelude::NostrGroupDataUpdate;
+            let update = NostrGroupDataUpdate {
+                admins: Some(new_admins),
+                ..Default::default()
+            };
+
+            let update_result = mdk.update_group_data(&group_id, update)
+                .map_err(|e| JsValue::from_str(&format!("Failed to update admins: {}", e)))?;
+
+            // Merge the update commit
+            mdk.merge_pending_commit(&group_id)
+                .map_err(|e| JsValue::from_str(&format!("Failed to merge admin update: {}", e)))?;
+
+            // Publish the admin update evolution event
+            let client = create_connected_client().await?;
+            let send_result = client.send_event(&update_result.evolution_event).await
+                .map_err(|e| JsValue::from_str(&format!("Failed to publish admin update: {}", e)))?;
+
+            let success_relays: Vec<String> = send_result.success.iter().map(|url| url.to_string()).collect();
+            let failed_relays: Vec<_> = send_result.failed.iter()
+                .map(|(url, err)| serde_json::json!({"url": url.to_string(), "error": err.to_string()}))
+                .collect();
+
+            for relay_url in &success_relays {
+                log(&format!("  ✓ {} accepted admin update", relay_url));
+            }
+
+            // Save state
+            let storage = get_or_create_storage().await?;
+            storage.inner().save_snapshot()
+                .map_err(|e| JsValue::from_str(&format!("Failed to save: {:?}", e)))?;
+
+            let _ = client.disconnect().await;
+
+            log("✅ Member promoted to admin!");
+
+            let response = serde_json::json!({
+                "relays_success": success_relays,
+                "relays_failed": failed_relays,
+            });
+
+            Ok::<String, JsValue>(response.to_string())
+        }
+        .await;
+
+        result.map(|json| JsValue::from_str(&json))
+    })
+}
+
 pub fn invite_member_to_group(group_id_hex: String, member_npub: String, is_admin: bool) -> js_sys::Promise {
     future_to_promise(async move {
         let result = async {

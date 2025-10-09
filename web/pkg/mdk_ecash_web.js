@@ -610,6 +610,17 @@ export function get_balance() {
 }
 
 /**
+ * Get transaction history from wallet database
+ * Returns a Promise that resolves to JSON array of transaction objects
+ * Sorted by most recent first
+ * @returns {Promise<any>}
+ */
+export function get_transaction_history() {
+    const ret = wasm.get_transaction_history();
+    return ret;
+}
+
+/**
  * Get balances for all mints in the wallet database
  * Returns a Promise that resolves to JSON array of {mint: string, balance: number, is_trusted: bool}
  * Sorted by descending balance
@@ -649,9 +660,25 @@ export function send_ecash(amount) {
 }
 
 /**
+ * Send ecash with P2PK - creates a token locked to recipient's public key
+ * Returns the token string
+ * @param {bigint} amount
+ * @param {string} recipient_npub
+ * @returns {Promise<any>}
+ */
+export function send_ecash_p2pk(amount, recipient_npub) {
+    _assertBigInt(amount);
+    const ptr0 = passStringToWasm0(recipient_npub, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.send_ecash_p2pk(amount, ptr0, len0);
+    return ret;
+}
+
+/**
  * Receive ecash token
  * Returns a Promise that resolves to the amount received
  * Creates a wallet for the token's mint (not the current mint)
+ * Automatically handles P2PK tokens by signing with the user's Nostr key
  * @param {string} token_str
  * @returns {Promise<any>}
  */
@@ -821,6 +848,31 @@ export function create_group_with_members(name, description, member_npubs_json) 
 }
 
 /**
+ * Create group and publish evolution event
+ * Returns welcome_rumors array, member npubs array, and group_id
+ * @param {string} name
+ * @param {string} description
+ * @param {string} keypackage_event_ids_json
+ * @param {string} member_npubs_json
+ * @param {string} is_admin_flags_json
+ * @returns {Promise<any>}
+ */
+export function create_group_and_publish(name, description, keypackage_event_ids_json, member_npubs_json, is_admin_flags_json) {
+    const ptr0 = passStringToWasm0(name, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passStringToWasm0(description, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ptr2 = passStringToWasm0(keypackage_event_ids_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len2 = WASM_VECTOR_LEN;
+    const ptr3 = passStringToWasm0(member_npubs_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len3 = WASM_VECTOR_LEN;
+    const ptr4 = passStringToWasm0(is_admin_flags_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len4 = WASM_VECTOR_LEN;
+    const ret = wasm.create_group_and_publish(ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4);
+    return ret;
+}
+
+/**
  * Fetch KeyPackages for a given npub (for progressive UI updates)
  * @param {string} member_npub
  * @returns {Promise<any>}
@@ -845,20 +897,51 @@ export function fetch_deletions_for_npub(member_npub) {
 }
 
 /**
- * Invite a member to an existing group by their npub
- * Returns a Promise that resolves when the invite is sent
+ * Step 1: Add member to group and publish evolution event
+ * Returns welcome_rumors and relay status
  * @param {string} group_id_hex
+ * @param {string} keypackage_event_id
  * @param {string} member_npub
- * @param {boolean} is_admin
  * @returns {Promise<any>}
  */
-export function invite_member_to_group(group_id_hex, member_npub, is_admin) {
+export function add_member_and_publish(group_id_hex, keypackage_event_id, member_npub) {
+    const ptr0 = passStringToWasm0(group_id_hex, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passStringToWasm0(keypackage_event_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ptr2 = passStringToWasm0(member_npub, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len2 = WASM_VECTOR_LEN;
+    const ret = wasm.add_member_and_publish(ptr0, len0, ptr1, len1, ptr2, len2);
+    return ret;
+}
+
+/**
+ * Step 2: Publish Welcome message to relays
+ * @param {string} welcome_rumors_json
+ * @param {string} member_npub
+ * @returns {Promise<any>}
+ */
+export function publish_welcome_message(welcome_rumors_json, member_npub) {
+    const ptr0 = passStringToWasm0(welcome_rumors_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passStringToWasm0(member_npub, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ret = wasm.publish_welcome_message(ptr0, len0, ptr1, len1);
+    return ret;
+}
+
+/**
+ * Step 3: Promote member to admin and publish
+ * @param {string} group_id_hex
+ * @param {string} member_npub
+ * @returns {Promise<any>}
+ */
+export function promote_to_admin_and_publish(group_id_hex, member_npub) {
     const ptr0 = passStringToWasm0(group_id_hex, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
     const len0 = WASM_VECTOR_LEN;
     const ptr1 = passStringToWasm0(member_npub, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
     const len1 = WASM_VECTOR_LEN;
-    _assertBoolean(is_admin);
-    const ret = wasm.invite_member_to_group(ptr0, len0, ptr1, len1, is_admin);
+    const ret = wasm.promote_to_admin_and_publish(ptr0, len0, ptr1, len1);
     return ret;
 }
 
@@ -931,46 +1014,46 @@ export function subscribe_to_group_messages(group_id_hex, callback) {
     return ret;
 }
 
-function __wbg_adapter_10(arg0, arg1, arg2) {
-    _assertNum(arg0);
-    _assertNum(arg1);
-    wasm.closure3361_externref_shim(arg0, arg1, arg2);
-}
-
-function __wbg_adapter_13(arg0, arg1) {
-    _assertNum(arg0);
-    _assertNum(arg1);
-    wasm.wasm_bindgen__convert__closures_____invoke__h89436e299d7353c1(arg0, arg1);
-}
-
-function __wbg_adapter_16(arg0, arg1, arg2) {
-    _assertNum(arg0);
-    _assertNum(arg1);
-    wasm.closure2888_externref_shim(arg0, arg1, arg2);
-}
-
-function __wbg_adapter_19(arg0, arg1) {
+function __wbg_adapter_6(arg0, arg1) {
     _assertNum(arg0);
     _assertNum(arg1);
     wasm.wasm_bindgen__convert__closures_____invoke__h2fd891d687e4791b(arg0, arg1);
 }
 
-function __wbg_adapter_22(arg0, arg1, arg2) {
+function __wbg_adapter_9(arg0, arg1, arg2) {
     _assertNum(arg0);
     _assertNum(arg1);
-    wasm.closure3138_externref_shim(arg0, arg1, arg2);
+    wasm.closure3166_externref_shim(arg0, arg1, arg2);
 }
 
-function __wbg_adapter_27(arg0, arg1) {
+function __wbg_adapter_12(arg0, arg1, arg2) {
+    _assertNum(arg0);
+    _assertNum(arg1);
+    wasm.closure2916_externref_shim(arg0, arg1, arg2);
+}
+
+function __wbg_adapter_15(arg0, arg1, arg2) {
+    _assertNum(arg0);
+    _assertNum(arg1);
+    wasm.closure3389_externref_shim(arg0, arg1, arg2);
+}
+
+function __wbg_adapter_18(arg0, arg1) {
     _assertNum(arg0);
     _assertNum(arg1);
     wasm.wasm_bindgen__convert__closures_____invoke__hb2523d4d6b7cca2e(arg0, arg1);
 }
 
-function __wbg_adapter_234(arg0, arg1, arg2, arg3) {
+function __wbg_adapter_25(arg0, arg1) {
     _assertNum(arg0);
     _assertNum(arg1);
-    wasm.closure3387_externref_shim(arg0, arg1, arg2, arg3);
+    wasm.wasm_bindgen__convert__closures_____invoke__h89436e299d7353c1(arg0, arg1);
+}
+
+function __wbg_adapter_239(arg0, arg1, arg2, arg3) {
+    _assertNum(arg0);
+    _assertNum(arg1);
+    wasm.closure3415_externref_shim(arg0, arg1, arg2, arg3);
 }
 
 const __wbindgen_enum_BinaryType = ["blob", "arraybuffer"];
@@ -1194,7 +1277,7 @@ function __wbg_get_imports() {
                 const a = state0.a;
                 state0.a = 0;
                 try {
-                    return __wbg_adapter_234(a, state0.b, arg0, arg1);
+                    return __wbg_adapter_239(a, state0.b, arg0, arg1);
                 } finally {
                     state0.a = a;
                 }
@@ -1494,9 +1577,19 @@ function __wbg_get_imports() {
     imports.wbg.__wbg_wbindgenthrow_451ec1a8469d7eb6 = function(arg0, arg1) {
         throw new Error(getStringFromWasm0(arg0, arg1));
     };
-    imports.wbg.__wbindgen_cast_0c7c8da4a80ec3f5 = function() { return logError(function (arg0, arg1) {
-        // Cast intrinsic for `Closure(Closure { dtor_idx: 3360, function: Function { arguments: [Externref], shim_idx: 3361, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
-        const ret = makeMutClosure(arg0, arg1, 3360, __wbg_adapter_10);
+    imports.wbg.__wbindgen_cast_024d6d54d5bd8e24 = function() { return logError(function (arg0, arg1) {
+        // Cast intrinsic for `Closure(Closure { dtor_idx: 3165, function: Function { arguments: [NamedExternref("MessageEvent")], shim_idx: 3166, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
+        const ret = makeMutClosure(arg0, arg1, 3165, __wbg_adapter_9);
+        return ret;
+    }, arguments) };
+    imports.wbg.__wbindgen_cast_06bc17e974d1cff4 = function() { return logError(function (arg0, arg1) {
+        // Cast intrinsic for `Closure(Closure { dtor_idx: 2915, function: Function { arguments: [NamedExternref("CloseEvent")], shim_idx: 2916, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
+        const ret = makeMutClosure(arg0, arg1, 2915, __wbg_adapter_12);
+        return ret;
+    }, arguments) };
+    imports.wbg.__wbindgen_cast_0a1b152b650a4aa0 = function() { return logError(function (arg0, arg1) {
+        // Cast intrinsic for `Closure(Closure { dtor_idx: 1942, function: Function { arguments: [], shim_idx: 1944, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
+        const ret = makeMutClosure(arg0, arg1, 1942, __wbg_adapter_18);
         return ret;
     }, arguments) };
     imports.wbg.__wbindgen_cast_2241b6af4c4b2941 = function() { return logError(function (arg0, arg1) {
@@ -1504,19 +1597,14 @@ function __wbg_get_imports() {
         const ret = getStringFromWasm0(arg0, arg1);
         return ret;
     }, arguments) };
-    imports.wbg.__wbindgen_cast_3e876618712d6a13 = function() { return logError(function (arg0, arg1) {
-        // Cast intrinsic for `Closure(Closure { dtor_idx: 1914, function: Function { arguments: [], shim_idx: 1916, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
-        const ret = makeMutClosure(arg0, arg1, 1914, __wbg_adapter_27);
-        return ret;
-    }, arguments) };
-    imports.wbg.__wbindgen_cast_40c1f7be9cb32cda = function() { return logError(function (arg0, arg1) {
-        // Cast intrinsic for `Closure(Closure { dtor_idx: 2887, function: Function { arguments: [NamedExternref("CloseEvent")], shim_idx: 2888, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
-        const ret = makeMutClosure(arg0, arg1, 2887, __wbg_adapter_16);
-        return ret;
-    }, arguments) };
     imports.wbg.__wbindgen_cast_4625c577ab2ec9ee = function() { return logError(function (arg0) {
         // Cast intrinsic for `U64 -> Externref`.
         const ret = BigInt.asUintN(64, arg0);
+        return ret;
+    }, arguments) };
+    imports.wbg.__wbindgen_cast_a60e81eef6e6f4e8 = function() { return logError(function (arg0, arg1) {
+        // Cast intrinsic for `Closure(Closure { dtor_idx: 1722, function: Function { arguments: [], shim_idx: 1723, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
+        const ret = makeMutClosure(arg0, arg1, 1722, __wbg_adapter_6);
         return ret;
     }, arguments) };
     imports.wbg.__wbindgen_cast_cb9088102bce6b30 = function() { return logError(function (arg0, arg1) {
@@ -1524,24 +1612,19 @@ function __wbg_get_imports() {
         const ret = getArrayU8FromWasm0(arg0, arg1);
         return ret;
     }, arguments) };
+    imports.wbg.__wbindgen_cast_ce36c5c38b3d4650 = function() { return logError(function (arg0, arg1) {
+        // Cast intrinsic for `Closure(Closure { dtor_idx: 3388, function: Function { arguments: [Externref], shim_idx: 3389, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
+        const ret = makeMutClosure(arg0, arg1, 3388, __wbg_adapter_15);
+        return ret;
+    }, arguments) };
     imports.wbg.__wbindgen_cast_d6cd19b81560fd6e = function() { return logError(function (arg0) {
         // Cast intrinsic for `F64 -> Externref`.
         const ret = arg0;
         return ret;
     }, arguments) };
-    imports.wbg.__wbindgen_cast_e4155c9235d4bde2 = function() { return logError(function (arg0, arg1) {
-        // Cast intrinsic for `Closure(Closure { dtor_idx: 3137, function: Function { arguments: [NamedExternref("MessageEvent")], shim_idx: 3138, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
-        const ret = makeMutClosure(arg0, arg1, 3137, __wbg_adapter_22);
-        return ret;
-    }, arguments) };
-    imports.wbg.__wbindgen_cast_fa1c2a836b896509 = function() { return logError(function (arg0, arg1) {
-        // Cast intrinsic for `Closure(Closure { dtor_idx: 1694, function: Function { arguments: [], shim_idx: 1695, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
-        const ret = makeMutClosure(arg0, arg1, 1694, __wbg_adapter_19);
-        return ret;
-    }, arguments) };
-    imports.wbg.__wbindgen_cast_fdd000a3f42e2ffe = function() { return logError(function (arg0, arg1) {
-        // Cast intrinsic for `Closure(Closure { dtor_idx: 3162, function: Function { arguments: [], shim_idx: 3163, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
-        const ret = makeMutClosure(arg0, arg1, 3162, __wbg_adapter_13);
+    imports.wbg.__wbindgen_cast_f4961a0985a4a334 = function() { return logError(function (arg0, arg1) {
+        // Cast intrinsic for `Closure(Closure { dtor_idx: 3190, function: Function { arguments: [], shim_idx: 3191, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
+        const ret = makeMutClosure(arg0, arg1, 3190, __wbg_adapter_25);
         return ret;
     }, arguments) };
     imports.wbg.__wbindgen_init_externref_table = function() {

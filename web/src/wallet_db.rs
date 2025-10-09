@@ -37,10 +37,10 @@ pub struct HybridWalletDatabase {
 
 impl HybridWalletDatabase {
     pub async fn new() -> Result<Self, JsValue> {
-        // Try to load from IndexedDB
-        let state = match Self::load_from_indexeddb().await {
+        // Try to load from localStorage
+        let state = match Self::load_from_localstorage().await {
             Ok(state) => {
-                log("Loaded wallet state from IndexedDB");
+                log("Loaded wallet state from localStorage");
                 state
             }
             Err(_) => {
@@ -75,7 +75,7 @@ impl HybridWalletDatabase {
         Ok(())
     }
 
-    async fn load_from_indexeddb() -> Result<WalletState, JsValue> {
+    async fn load_from_localstorage() -> Result<WalletState, JsValue> {
         let storage = window()
             .ok_or_else(|| JsValue::from_str("No window"))?
             .local_storage()?
