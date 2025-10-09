@@ -1401,6 +1401,7 @@
 
                     const tokenHtml = `<span style="background: #ff8800; color: white; padding: 4px 8px; border-radius: 4px; font-weight: bold; display: inline-block; margin: 2px 0;">
                         ${info.amount} sats @ ${mintDisplay}
+                        <button onclick="copyToken('${tokenId}', event)" style="background: white; color: #ff8800; border: none; padding: 2px 6px; margin-left: 4px; border-radius: 3px; cursor: pointer; font-weight: bold; font-size: 0.9em;">Copy</button>
                         <button id="${tokenId}" onclick="redeemToken('${tokenId}')" style="background: white; color: #ff8800; border: none; padding: 2px 6px; margin-left: 4px; border-radius: 3px; cursor: pointer; font-weight: bold; font-size: 0.9em;">Redeem</button>
                     </span>`;
                     formattedContent = formattedContent.replace(token, tokenHtml);
@@ -1412,6 +1413,29 @@
 
             return formattedContent;
         }
+
+        // Copy token to clipboard
+        window.copyToken = async function(tokenId, event) {
+            const token = tokenStore.get(tokenId);
+            if (!token) {
+                alert('Token not found');
+                return;
+            }
+
+            try {
+                await navigator.clipboard.writeText(token);
+                // Brief visual feedback
+                const button = event.target;
+                const originalText = button.textContent;
+                button.textContent = 'Copied!';
+                setTimeout(() => {
+                    button.textContent = originalText;
+                }, 1500);
+            } catch (err) {
+                console.error('Failed to copy token:', err);
+                alert('Failed to copy token to clipboard');
+            }
+        };
 
         // Redemption progress modal functions
         window.showRedemptionProgress = function() {
