@@ -300,17 +300,7 @@ fn log(msg: &str) {
 }
 
 // Convert JsValue errors to domain-specific errors
-fn to_group_error(e: JsValue) -> GroupError {
-    GroupError::DatabaseError(format!("{:?}", e))
-}
-
-fn to_message_error(e: JsValue) -> MessageError {
-    MessageError::DatabaseError(format!("{:?}", e))
-}
-
-fn to_welcome_error(e: JsValue) -> WelcomeError {
-    WelcomeError::DatabaseError(format!("{:?}", e))
-}
+// Error conversion functions removed - no longer needed since we don't auto-save
 
 // Implement GroupStorage trait
 impl GroupStorage for MdkHybridStorage {

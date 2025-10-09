@@ -293,7 +293,6 @@
                 💰 Wallet
                 <div id="sidebar-balance" class="wallet-balance">...</div>
             </div>
-            <div class="nav-item" onclick="showSection('keypackages', event)">🔑 Key Packages</div>
             <div class="nav-item" onclick="showSection('groups', event)">📱 Groups</div>
         </div>
 
@@ -361,14 +360,6 @@
                     <div id="trusted-mints-list" style="margin: 15px 0;"></div>
                     <button onclick="showAddMintModal()">➕ Add Trusted Mint</button>
                 </div>
-            </div>
-
-            <!-- Key Packages Section -->
-            <div id="keypackages-section" class="section">
-                <h2>🔑 Join a Group</h2>
-                <p>Click the button below to create a KeyPackage and wait for someone to invite you to a group.</p>
-                <button onclick="createKeyPackageAndWait()">🚀 Create KeyPackage & Wait for Invite</button>
-                <div id="keypackages-status" style="margin-top: 20px;"></div>
             </div>
 
             <!-- Groups Section -->
@@ -466,27 +457,6 @@
             <div style="margin-top: 20px; display: flex; gap: 10px;">
                 <button onclick="createSendToken()" style="flex: 1; padding: 12px; background: #0066cc; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 1em;">Create Token</button>
                 <button onclick="hideSendModal()" style="padding: 12px 30px; background: #ccc; border: none; border-radius: 4px; cursor: pointer;">Cancel</button>
-            </div>
-        </div>
-    </div>
-
-    <!-- Wait for Invite Modal -->
-    <div id="wait-invite-modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000; overflow-y: auto;">
-        <div style="background: white; max-width: 700px; margin: 50px auto; padding: 30px; border-radius: 8px; text-align: center;">
-            <h2>⏳ Waiting for Group Invite</h2>
-            <p style="margin: 20px 0;">Your KeyPackage is being published!</p>
-            <div class="npub" id="wait-npub" style="margin: 20px 0;"></div>
-            <div id="wait-status" style="margin: 20px 0; font-weight: bold; color: #0066cc;"></div>
-
-            <!-- Relay Status -->
-            <div id="wait-relay-status" style="margin: 20px auto; max-width: 500px; text-align: left; font-size: 0.9em; max-height: 200px; overflow-y: auto; background: #f9f9f9; padding: 10px; border-radius: 4px; display: none;">
-                <div style="font-weight: bold; margin-bottom: 5px; text-align: center;">Relay Status:</div>
-                <div id="wait-relay-list"></div>
-            </div>
-
-            <p style="color: #666; margin: 20px 0;" id="wait-instruction">Waiting for someone to invite you to a group...</p>
-            <div style="margin-top: 20px;">
-                <div style="display: inline-block; width: 40px; height: 40px; border: 4px solid #f3f3f3; border-top: 4px solid #0066cc; border-radius: 50%; animation: spin 1s linear infinite;"></div>
             </div>
         </div>
     </div>
@@ -752,7 +722,6 @@
             get_groups,
             fetch_welcome_events,
             process_pending_welcomes,
-            create_keypackage_and_wait_for_invite,
             create_and_publish_keypackage,
             subscribe_to_welcome_messages,
             debug_fetch_welcome_events,
@@ -2444,44 +2413,6 @@
                         relayList.innerHTML += `<div style="color: #ff6600; padding: 2px 0;">✗ ${relay}: ${error}</div>`;
                     }
                 }
-            }
-        };
-
-        window.createKeyPackageAndWait = async function() {
-            try {
-                // Reset and show modal
-                document.getElementById('wait-invite-modal').style.display = 'block';
-                document.getElementById('wait-npub').textContent = get_npub();
-                document.getElementById('wait-status').textContent = 'Creating KeyPackage...';
-                document.getElementById('wait-relay-list').innerHTML = '';
-                document.getElementById('wait-relay-status').style.display = 'none';
-
-                // Start capturing relay status
-                relayStatusCapture = true;
-
-                // Call the WASM function (it will poll and wait)
-                const groupName = await create_keypackage_and_wait_for_invite();
-
-                // Stop capturing
-                relayStatusCapture = false;
-
-                // Success!
-                document.getElementById('wait-status').innerHTML = `<div class="success">✅ Joined group: ${groupName}</div>`;
-
-                // Wait 2 seconds then close modal and refresh groups
-                setTimeout(async () => {
-                    document.getElementById('wait-invite-modal').style.display = 'none';
-                    await refreshGroups(); // Auto-subscribes
-                    // Switch to groups tab
-                    showSection('groups');
-                }, 2000);
-            } catch (err) {
-                console.error('Failed to join group:', err);
-                relayStatusCapture = false;
-                document.getElementById('wait-status').innerHTML = `<div class="error">Failed: ${err}</div>`;
-                setTimeout(() => {
-                    document.getElementById('wait-invite-modal').style.display = 'none';
-                }, 3000);
             }
         };
 
