@@ -85,42 +85,18 @@ When someone invites you:
 - **Invite Member**: Click "➕ Invite Member" button in chat
 - All invited members are automatically promoted to admin
 
-### Special Commands
+### Wallet
 
-#### `!topup [amount]`
-Request a Lightning invoice to add sats to your wallet.
-- Opens a QR code popup window
-- Default: 100 sats if no amount specified
-- Example: `!topup 50`
-
-#### `!redeem <TOKEN>`
-Receive a cashu token into your wallet.
-- Token format: starts with `cashuA` or `cashuB`
-- Example: `!redeem cashuAeyJ0b2tlbiI...`
-
-#### `!send [amount]`
-Create a cashu token and broadcast it to the group via MLS.
-- Default: 10 sats if no amount specified
-- Token appears formatted: `[🎁 Cashu Token: X sats from https://nofees.testnut.cashu.space]`
-- Example: `!send 5`
-
-#### `!redeemlast`
-Automatically find and redeem the most recent cashu token from the chat.
-- Searches backwards through messages
-- Redeems the first cashu token found
-
-## Mint Configuration
-
-Currently using testnut mint (no real sats):
-```
-https://nofees.testnut.cashu.space
-```
-
-To change mint, edit `web/src/lib.rs` (search for `MINT_URL`).
+- **Receive e-cash**: Click "📥 Receive e-cash" button and paste a cashu token
+- **Send e-cash**: Click "📤 Send e-cash" button, select a mint, and enter the amount
+- **Manage Mints**: Add trusted mints, view balances per mint, set current mint for sending
+- **Multi-mint Support**: Store tokens from multiple mints, with per-mint balance tracking
 
 ## Wallet Storage
 
 Wallets are persisted in browser localStorage. Balances are automatically restored on page reload.
+
+The default testnut mint is: `https://nofees.testnut.cashu.space` (no real sats).
 
 ## Technical Details
 
@@ -133,9 +109,9 @@ Wallets are persisted in browser localStorage. Balances are automatically restor
 
 ### Cashu Integration
 - Wallet operations compiled to WebAssembly
-- Tokens are sent as encrypted MLS messages
+- Multi-mint support with trust-based validation
 - Automatic balance updates after transactions
-- Token redemption integrated into chat interface
+- Per-mint balance tracking and management
 
 ### Message Flow
 1. User types message → MLS encryption (in WASM)
@@ -159,9 +135,9 @@ All group operations generate visible messages:
 1. Open the web app in your browser
 2. Create a group and invite a friend (share your npub with them first)
 3. Send messages in the encrypted group chat
-4. Use `!send 5` to create a 5-sat cashu token
-5. Friend uses `!redeemlast` to claim the token
-6. Use `!topup 100` to request more funds via Lightning
+4. Add a trusted mint in the Wallet section
+5. Use "📤 Send e-cash" to create a cashu token and share it
+6. Friend uses "📥 Receive e-cash" to claim the token
 
 ## License
 
