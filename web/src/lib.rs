@@ -1341,11 +1341,8 @@ pub fn process_welcome_event(welcome_event_id: String, kp_event_id: String) -> j
             log("  Processing Welcome with MDK...");
             let mdk = create_mdk().await?;
 
-            // Check if we already have this group (Welcome already processed)
-            let groups = mdk.get_groups()
-                .map_err(|e| JsValue::from_str(&format!("Failed to get groups: {}", e)))?;
-
             // Try to process the Welcome
+            // Note: We handle "already processed" errors below, so no need to pre-check
             let welcome = match mdk.process_welcome(&welcome_event.id, &rumor) {
                 Ok(w) => w,
                 Err(e) => {
