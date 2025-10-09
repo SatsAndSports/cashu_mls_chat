@@ -513,6 +513,17 @@
         </div>
     </div>
 
+    <!-- Redemption Progress Modal -->
+    <div id="redemption-progress-modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1001;">
+        <div style="background: white; max-width: 500px; margin: 100px auto; padding: 30px; border-radius: 8px; text-align: center;">
+            <h2 id="redemption-title">💰 Redeeming Token</h2>
+            <div id="redemption-status" style="margin: 30px 0; font-size: 1.1em;"></div>
+            <div id="redemption-close-btn" style="display: none;">
+                <button onclick="hideRedemptionProgress()" style="padding: 10px 30px; font-size: 1em;">Close</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Send E-cash in Chat Modal -->
     <div id="send-ecash-chat-modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000;">
         <div style="background: white; max-width: 600px; margin: 50px auto; padding: 20px; border-radius: 8px;">
@@ -1069,14 +1080,16 @@
         window.addMintAndRedeem = async function() {
             if (!pendingTokenRedemption) return;
 
+            // Close untrusted mint warning modal and show progress modal
+            closeUntrustedMintModal();
+            showRedemptionProgress();
+            document.getElementById('redemption-status').innerHTML = '🔄 Adding mint and redeeming...';
+
             try {
                 const { mint, token } = pendingTokenRedemption;
 
                 // Add mint to trusted list
                 await add_trusted_mint(mint);
-
-                // Close untrusted mint warning modal
-                closeUntrustedMintModal();
 
                 // Now redeem directly (mint is now trusted, so redeemTokenInternal will succeed)
                 const amount = await receive_token(token);
@@ -1084,27 +1097,15 @@
                 // Update balance display
                 await refreshMintBalances();
 
-                // Show success in receive modal if it's open
-                const receiveStatus = document.getElementById('receive-status');
-                if (receiveStatus) {
-                    receiveStatus.innerHTML = `<div class="success">✅ Received ${amount} sats!</div>`;
-                }
-
-                // Close receive modal after 2 seconds
-                setTimeout(() => {
-                    const receiveModal = document.getElementById('receive-modal');
-                    if (receiveModal && receiveModal.style.display !== 'none') {
-                        hideReceiveModal();
-                    }
-                }, 2000);
+                // Show success in progress modal
+                document.getElementById('redemption-status').innerHTML = `<div class="success" style="font-size: 1.2em;">✅ Successfully received ${amount} sats!</div>`;
+                document.getElementById('redemption-close-btn').style.display = 'block';
             } catch (err) {
                 console.error('Failed to add mint and redeem:', err);
 
-                // Show error in receive modal
-                const receiveStatus = document.getElementById('receive-status');
-                if (receiveStatus) {
-                    receiveStatus.innerHTML = `<div class="error">Failed: ${err}</div>`;
-                }
+                // Show error in progress modal
+                document.getElementById('redemption-status').innerHTML = `<div class="error" style="font-size: 1.1em;">❌ Failed: ${err}</div>`;
+                document.getElementById('redemption-close-btn').style.display = 'block';
             }
         };
 
@@ -1412,6 +1413,17 @@
             return formattedContent;
         }
 
+        // Redemption progress modal functions
+        window.showRedemptionProgress = function() {
+            document.getElementById('redemption-progress-modal').style.display = 'block';
+            document.getElementById('redemption-status').innerHTML = '';
+            document.getElementById('redemption-close-btn').style.display = 'none';
+        };
+
+        window.hideRedemptionProgress = function() {
+            document.getElementById('redemption-progress-modal').style.display = 'none';
+        };
+
         window.redeemToken = async function(tokenId) {
             const token = tokenStore.get(tokenId);
             if (!token) {
@@ -1421,6 +1433,10 @@
 
             const button = document.getElementById(tokenId);
             if (!button) return;
+
+            // Show redemption progress modal
+            showRedemptionProgress();
+            document.getElementById('redemption-status').innerHTML = '🔄 Redeeming token...';
 
             // Disable button during redemption
             button.disabled = true;
@@ -1442,15 +1458,21 @@
                 // Remove token from store
                 tokenStore.delete(tokenId);
 
-                alert(`Successfully redeemed ${amount} sats!`);
+                // Show success in modal
+                document.getElementById('redemption-status').innerHTML = `<div class="success" style="font-size: 1.2em;">✅ Successfully redeemed ${amount} sats!</div>`;
+                document.getElementById('redemption-close-btn').style.display = 'block';
             } catch (err) {
                 console.error('❌ Failed to redeem token:', err);
                 button.disabled = false;
                 button.textContent = 'Redeem';
+
                 if (err.message && err.message.includes('untrusted mint')) {
-                    // User will see the warning modal
+                    // Close progress modal, untrusted mint warning modal will show
+                    hideRedemptionProgress();
                 } else {
-                    alert(`Failed to redeem token: ${err}`);
+                    // Show error in modal
+                    document.getElementById('redemption-status').innerHTML = `<div class="error" style="font-size: 1.1em;">❌ Failed to redeem: ${err}</div>`;
+                    document.getElementById('redemption-close-btn').style.display = 'block';
                 }
             }
         };
@@ -1716,32 +1738,35 @@
 
         window.receiveToken = async function() {
             const tokenInput = document.getElementById('token-input').value.trim();
-            const statusDiv = document.getElementById('receive-status');
 
             if (!tokenInput) {
-                statusDiv.innerHTML = '<div class="error">Please paste a token</div>';
+                document.getElementById('receive-status').innerHTML = '<div class="error">Please paste a token</div>';
                 return;
             }
 
-            statusDiv.innerHTML = 'Receiving token...';
+            // Close receive modal and show progress modal
+            hideReceiveModal();
+            showRedemptionProgress();
+            document.getElementById('redemption-status').innerHTML = '🔄 Receiving token...';
 
             try {
                 const amount = await redeemTokenInternal(tokenInput);
-                statusDiv.innerHTML = `<div class="success">✅ Received ${amount} sats!</div>`;
 
                 // Update balance display
                 await refreshMintBalances();
 
-                // Close modal after 2 seconds
-                setTimeout(() => {
-                    hideReceiveModal();
-                }, 2000);
+                // Show success in modal
+                document.getElementById('redemption-status').innerHTML = `<div class="success" style="font-size: 1.2em;">✅ Successfully received ${amount} sats!</div>`;
+                document.getElementById('redemption-close-btn').style.display = 'block';
             } catch (err) {
                 console.error('Failed to receive token:', err);
                 if (err.message && err.message.includes('untrusted mint')) {
-                    statusDiv.innerHTML = '<div class="error">Token from untrusted mint - check warning dialog</div>';
+                    // Close progress modal, untrusted mint warning modal will show
+                    hideRedemptionProgress();
                 } else {
-                    statusDiv.innerHTML = `<div class="error">Failed to receive: ${err}</div>`;
+                    // Show error in modal
+                    document.getElementById('redemption-status').innerHTML = `<div class="error" style="font-size: 1.1em;">❌ Failed to receive: ${err}</div>`;
+                    document.getElementById('redemption-close-btn').style.display = 'block';
                 }
             }
         };
