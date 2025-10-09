@@ -82,6 +82,26 @@
         .balance-decrease {
             animation: balanceDecrease 0.6s ease-out;
         }
+        @keyframes slideIn {
+            from {
+                transform: translateX(400px);
+                opacity: 0;
+            }
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+        @keyframes slideOut {
+            from {
+                transform: translateX(0);
+                opacity: 1;
+            }
+            to {
+                transform: translateX(400px);
+                opacity: 0;
+            }
+        }
         #content {
             flex: 1;
             padding: 20px;
@@ -267,7 +287,7 @@
     <div id="main">
         <!-- Sidebar -->
         <div id="sidebar">
-            <div class="nav-item active" onclick="showSection('identity', event)">🔐 Nostr Identity</div>
+            <div class="nav-item active" onclick="showSection('identity', event)">🔐 Identity & Key Packages</div>
             <div class="nav-item" onclick="showSection('relays', event)">⚙️ Relays</div>
             <div class="nav-item" onclick="showSection('wallet', event)">
                 💰 Wallet
@@ -281,7 +301,7 @@
         <div id="content">
             <!-- Identity Section -->
             <div id="identity-section" class="section active">
-                <h2>Nostr Identity</h2>
+                <h2>Identity & Key Packages</h2>
                 <div id="status">Loading WASM module...</div>
                 <div id="npub-container" style="display: none;">
                     <p><strong>Your npub:</strong></p>
@@ -290,6 +310,23 @@
                 <div id="buttons" style="display: none;">
                     <button onclick="newKeys()">Generate New Keys</button>
                     <button onclick="clearKeys()">Clear Keys</button>
+                </div>
+
+                <!-- Key Packages Section -->
+                <div id="keypackages-container" style="display: none; margin-top: 30px; padding-top: 20px; border-top: 1px solid #ddd;">
+                    <h3>Key Packages</h3>
+                    <p style="font-size: 0.9em; color: #666; margin-bottom: 15px;">
+                        Key Packages allow others to invite you to groups. When someone adds you to a group, they fetch your most recent Key Package from relays.
+                    </p>
+
+                    <div id="keypackage-nudge" style="display: none; background: #fff3cd; border: 1px solid #ffc107; border-radius: 4px; padding: 15px; margin-bottom: 15px;">
+                        <strong>⚠️ No KeyPackages available</strong>
+                        <p style="margin: 8px 0 0 0; font-size: 0.9em;">Create a KeyPackage to allow others to invite you to groups.</p>
+                    </div>
+
+                    <div id="keypackage-list"></div>
+
+                    <button onclick="createKeyPackage()" style="margin-top: 15px;">+ Create KeyPackage</button>
                 </div>
             </div>
 
@@ -334,6 +371,12 @@
             <!-- Groups Section -->
             <div id="groups-section" class="section">
                 <h2>📱 Groups</h2>
+
+                <div id="groups-keypackage-nudge" style="display: none; background: #fff3cd; border: 1px solid #ffc107; border-radius: 4px; padding: 15px; margin-bottom: 15px;">
+                    <strong>⚠️ Create a KeyPackage to receive group invites</strong>
+                    <button onclick="showSection('identity'); createKeyPackage();" style="margin-left: 10px; padding: 5px 15px; background: #0066cc; color: white; border: none; border-radius: 4px; cursor: pointer;">Create One</button>
+                </div>
+
                 <div id="groups-status">Loading groups...</div>
                 <div id="groups-list"></div>
                 <button onclick="showCreateGroupModal()">➕ Create New Group</button>
@@ -697,6 +740,9 @@
             fetch_welcome_events,
             process_pending_welcomes,
             create_keypackage_and_wait_for_invite,
+            create_and_publish_keypackage,
+            subscribe_to_welcome_messages,
+            debug_fetch_welcome_events,
             create_group_with_members,
             invite_member_to_group,
             send_message_to_group,
@@ -728,6 +774,29 @@
         function setLastReadAt(groupId, timestamp) {
             const key = `last_read_at_${groupId}`;
             localStorage.setItem(key, timestamp.toString());
+        }
+
+        // KeyPackage management in localStorage
+        function getCreatedKeyPackages() {
+            const data = localStorage.getItem('created_keypackages');
+            return data ? JSON.parse(data) : [];
+        }
+
+        function saveCreatedKeyPackage(eventId, createdAt) {
+            const packages = getCreatedKeyPackages();
+            packages.push({ event_id: eventId, created_at: createdAt });
+            localStorage.setItem('created_keypackages', JSON.stringify(packages));
+        }
+
+        function getConsumedKeyPackages() {
+            const data = localStorage.getItem('consumed_keypackages');
+            return data ? JSON.parse(data) : {};
+        }
+
+        function markKeyPackageConsumed(kpEventId, groupId) {
+            const consumed = getConsumedKeyPackages();
+            consumed[kpEventId] = groupId;
+            localStorage.setItem('consumed_keypackages', JSON.stringify(consumed));
         }
 
         function countUnreadMessages(groupId, messages, lastReadAt) {
@@ -834,6 +903,15 @@
 
                 await initializeWallet();
                 await initializeGroups();
+
+                // Initialize KeyPackages
+                document.getElementById('keypackages-container').style.display = 'block';
+                await refreshKeyPackageList();
+                // await initializeWelcomeSubscription();
+
+                // DEBUG: Poll for Welcomes every 5 seconds
+                startWelcomePolling();
+
                 document.getElementById('buttons').style.display = 'block';
                 document.getElementById('status').innerHTML = '<div class="success">✓ Ready</div>';
 
@@ -1730,6 +1808,247 @@
                 }
             }
         };
+
+        // ==========================================
+        // KEY PACKAGE MANAGEMENT
+        // ==========================================
+
+        // Create a new KeyPackage
+        window.createKeyPackage = async function() {
+            try {
+                console.log("Creating KeyPackage...");
+                const resultJson = await create_and_publish_keypackage();
+                const result = JSON.parse(resultJson);
+
+                console.log("KeyPackage created:", result);
+
+                // Save to localStorage
+                saveCreatedKeyPackage(result.event_id, result.created_at);
+
+                // Refresh list
+                await refreshKeyPackageList();
+
+                showToast('✅ KeyPackage created and published!');
+            } catch (err) {
+                console.error('Failed to create KeyPackage:', err);
+                alert(`Failed to create KeyPackage: ${err}`);
+            }
+        };
+
+        // Refresh the KeyPackage list display
+        async function refreshKeyPackageList() {
+            const listDiv = document.getElementById('keypackage-list');
+            const nudgeDiv = document.getElementById('keypackage-nudge');
+            const created = getCreatedKeyPackages();
+            const consumed = getConsumedKeyPackages();
+
+            // Sort by created_at descending (newest first)
+            created.sort((a, b) => b.created_at - a.created_at);
+
+            // Count available (not consumed)
+            const availableCount = created.filter(kp => !consumed[kp.event_id]).length;
+
+            // Show/hide nudges
+            if (availableCount === 0) {
+                nudgeDiv.style.display = 'block';
+                // Also show nudge on Groups page
+                const groupsNudge = document.getElementById('groups-keypackage-nudge');
+                if (groupsNudge) groupsNudge.style.display = 'block';
+            } else {
+                nudgeDiv.style.display = 'none';
+                const groupsNudge = document.getElementById('groups-keypackage-nudge');
+                if (groupsNudge) groupsNudge.style.display = 'none';
+            }
+
+            if (created.length === 0) {
+                listDiv.innerHTML = '<p style="color: #666; font-style: italic;">No KeyPackages yet</p>';
+                return;
+            }
+
+            // Get groups to show names for consumed packages
+            const groupsJson = await get_groups();
+            const groups = JSON.parse(groupsJson);
+            const groupMap = {};
+            groups.forEach(g => {
+                groupMap[g.id] = g.name || 'Unnamed Group';
+            });
+
+            listDiv.innerHTML = created.map(kp => {
+                const isConsumed = consumed[kp.event_id];
+                const date = new Date(kp.created_at * 1000);
+                const timeAgo = formatTimeAgo(kp.created_at);
+
+                let statusHtml;
+                if (isConsumed) {
+                    const groupName = groupMap[isConsumed] || 'Unknown Group';
+                    statusHtml = `<div style="color: #28a745; font-size: 0.9em;">✅ Used to join: ${groupName}</div>`;
+                } else {
+                    statusHtml = `<div style="color: #666; font-size: 0.9em;">📦 Available</div>`;
+                }
+
+                const eventIdShort = kp.event_id.substring(0, 16) + '...';
+
+                return `
+                    <div style="background: #f9f9f9; border: 1px solid #ddd; border-radius: 4px; padding: 15px; margin: 10px 0;">
+                        <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+                            <div style="flex: 1;">
+                                <div style="font-weight: bold; margin-bottom: 4px;">KeyPackage ${eventIdShort}</div>
+                                <div style="font-size: 0.85em; color: #666; margin-bottom: 8px;">
+                                    Published: ${timeAgo}
+                                </div>
+                                ${statusHtml}
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        // Format timestamp as "X minutes ago"
+        function formatTimeAgo(timestamp) {
+            const now = Math.floor(Date.now() / 1000);
+            const diff = now - timestamp;
+
+            if (diff < 60) return 'Just now';
+            if (diff < 3600) return `${Math.floor(diff / 60)} minutes ago`;
+            if (diff < 86400) return `${Math.floor(diff / 3600)} hours ago`;
+            if (diff < 604800) return `${Math.floor(diff / 86400)} days ago`;
+
+            const date = new Date(timestamp * 1000);
+            return date.toLocaleDateString();
+        }
+
+        // Show toast notification
+        function showToast(message) {
+            const toast = document.createElement('div');
+            toast.textContent = message;
+            toast.style.cssText = `
+                position: fixed;
+                top: 20px;
+                right: 20px;
+                background: #28a745;
+                color: white;
+                padding: 15px 25px;
+                border-radius: 8px;
+                box-shadow: 0 4px 6px rgba(0,0,0,0.2);
+                z-index: 10000;
+                font-weight: bold;
+                animation: slideIn 0.3s ease-out;
+            `;
+            document.body.appendChild(toast);
+
+            setTimeout(() => {
+                toast.style.animation = 'slideOut 0.3s ease-out';
+                setTimeout(() => toast.remove(), 300);
+            }, 3000);
+        }
+
+        // DEBUG: Poll for Welcomes every 10 seconds
+        function startWelcomePolling() {
+            console.log("🔍 Starting Welcome polling (every 10 seconds)...");
+
+            async function pollWelcomes() {
+                try {
+                    console.log("🔍 Polling for Welcome messages...");
+
+                    // Get our keys
+                    const ourPubkeyHex = get_pubkey_hex();
+                    const ourNpub = get_npub();
+
+                    console.log(`  Our npub: ${ourNpub}`);
+                    console.log(`  Our pubkey (hex): ${ourPubkeyHex}`);
+
+                    // Get our created KeyPackages
+                    const created = getCreatedKeyPackages();
+                    const kpEventIds = created.map(kp => kp.event_id);
+                    console.log(`  Our KeyPackage event IDs: ${kpEventIds.length}`, kpEventIds);
+
+                    // Get consumed map
+                    const consumed = getConsumedKeyPackages();
+                    console.log(`  Consumed KeyPackages:`, consumed);
+
+                    // Fetch all Kind 444 (Welcome) events using WASM function
+                    const eventsJson = await debug_fetch_welcome_events();
+                    const welcomeEvents = JSON.parse(eventsJson);
+                    console.log(`  Found ${welcomeEvents.length} total Welcome events on relays`);
+
+                    // Analyze each Welcome
+                    for (const event of welcomeEvents) {
+                        console.log(`\n  📩 Welcome event: ${event.id.substring(0, 16)}...`);
+                        console.log(`     Created: ${new Date(event.created_at * 1000).toISOString()}`);
+                        console.log(`     From pubkey: ${event.pubkey.substring(0, 16)}...`);
+                        console.log(`     Content length: ${event.content_len} bytes`);
+
+                        // Check p tags (addressed to)
+                        const pTags = event.tags.filter(tag => tag.kind === 'p');
+                        const addressedToPubkeys = pTags.map(tag => tag.content).filter(Boolean);
+                        console.log(`     P tags (addressed to): ${addressedToPubkeys.length}`,
+                            addressedToPubkeys.map(p => p.substring(0, 16) + '...'));
+
+                        const isAddressedToUs = addressedToPubkeys.some(p => p === ourPubkeyHex);
+                        console.log(`     ✓ Addressed to us? ${isAddressedToUs ? 'YES' : 'NO'}`);
+
+                        // Check e tags (references KeyPackages)
+                        const eTags = event.tags.filter(tag => tag.kind === 'e');
+                        const referencedKPs = eTags.map(tag => tag.content).filter(Boolean);
+                        console.log(`     E tags (KeyPackage refs): ${referencedKPs.length}`,
+                            referencedKPs.map(kp => kp ? kp.substring(0, 16) + '...' : 'null'));
+
+                        // Check if it references our KeyPackages
+                        const matchingKP = referencedKPs.find(kp => kpEventIds.includes(kp));
+                        if (matchingKP) {
+                            console.log(`     ✅ References our KeyPackage: ${matchingKP.substring(0, 16)}...`);
+                            console.log(`     📝 TODO: Check if we have private key in storage`);
+
+                            // Check if already consumed
+                            if (consumed[matchingKP]) {
+                                console.log(`     ⚠️ Already consumed! Used for group: ${consumed[matchingKP]}`);
+                            } else {
+                                console.log(`     ⚡ NOT YET CONSUMED - could process this!`);
+                            }
+                        } else {
+                            console.log(`     ❌ Does NOT reference any of our KeyPackages`);
+                        }
+                    }
+
+                    console.log("🔍 Polling complete\n");
+
+                } catch (err) {
+                    console.error('❌ Error polling Welcomes:', err);
+                }
+            }
+
+            // Poll immediately, then every 10 seconds
+            pollWelcomes();
+            setInterval(pollWelcomes, 10000);
+        }
+
+        // Subscribe to Welcome messages on startup
+        async function initializeWelcomeSubscription() {
+            try {
+                console.log("Initializing Welcome subscription...");
+                await subscribe_to_welcome_messages(async (resultJson) => {
+                    const result = JSON.parse(resultJson);
+                    console.log("📨 Received Welcome:", result);
+
+                    // Mark KeyPackage as consumed
+                    markKeyPackageConsumed(result.kp_event_id, result.group_id);
+
+                    // Refresh groups list
+                    await refreshGroups();
+
+                    // Refresh KeyPackage list
+                    await refreshKeyPackageList();
+
+                    // Show notification
+                    showToast(`📨 Joined group: ${result.group_name}`);
+                });
+
+                console.log("✓ Welcome subscription active");
+            } catch (err) {
+                console.error('Failed to subscribe to Welcomes:', err);
+            }
+        }
 
         // Helper function to redeem token with trust checking
         async function redeemTokenInternal(token) {

@@ -1144,6 +1144,271 @@ pub fn create_keypackage_and_wait_for_invite() -> js_sys::Promise {
     })
 }
 
+/// Create and publish a KeyPackage (passive mode - returns immediately)
+/// Returns Promise resolving to JSON: { event_id, created_at }
+#[wasm_bindgen]
+pub fn create_and_publish_keypackage() -> js_sys::Promise {
+    future_to_promise(async move {
+        let result = async {
+            log("🔑 Creating and publishing KeyPackage...");
+
+            // Get keys
+            let keys = get_keys()?;
+            let pubkey = keys.public_key();
+
+            // Create MDK
+            let mdk = create_mdk().await?;
+
+            // Create KeyPackage
+            log("Creating KeyPackage...");
+            let relays = get_relays_internal()?;
+            let relay_urls: Vec<RelayUrl> = relays
+                .iter()
+                .filter_map(|r| RelayUrl::parse(r).ok())
+                .collect();
+
+            let (key_package_hex, tags) = mdk
+                .create_key_package_for_event(&pubkey, relay_urls)
+                .map_err(|e| JsValue::from_str(&format!("Failed to create KeyPackage: {}", e)))?;
+
+            // Build and sign event
+            let event = EventBuilder::new(Kind::Custom(443), key_package_hex)
+                .tags(tags.to_vec())
+                .sign_with_keys(&keys)
+                .map_err(|e| JsValue::from_str(&format!("Failed to sign event: {}", e)))?;
+
+            let kp_event_id = event.id.to_hex();
+            let created_at = event.created_at.as_u64();
+            log(&format!("KeyPackage event ID: {}", kp_event_id));
+
+            // Explicitly save storage to persist private key
+            let storage = get_or_create_storage().await?;
+            storage.save_snapshot()
+                .map_err(|e| JsValue::from_str(&format!("Failed to save storage: {:?}", e)))?;
+            log("✓ KeyPackage private key saved to storage");
+
+            // Connect to relays and publish
+            let client = create_connected_client().await?;
+            log("Publishing KeyPackage to relays...");
+            let send_result = client.send_event(&event).await
+                .map_err(|e| JsValue::from_str(&format!("Failed to publish: {}", e)))?;
+
+            log(&format!("✅ KeyPackage published!"));
+            for relay_url in send_result.success.iter() {
+                log(&format!("  ✓ {} accepted", relay_url));
+            }
+            for (relay_url, error) in send_result.failed.iter() {
+                log(&format!("  ✗ {} rejected: {}", relay_url, error));
+            }
+
+            // Disconnect
+            let _ = client.disconnect().await;
+
+            // Return event ID and timestamp as JSON
+            #[derive(Serialize)]
+            struct KeyPackageResult {
+                event_id: String,
+                created_at: u64,
+            }
+
+            let result = KeyPackageResult {
+                event_id: kp_event_id,
+                created_at,
+            };
+
+            let json = serde_json::to_string(&result)
+                .map_err(|e| JsValue::from_str(&format!("JSON serialization error: {}", e)))?;
+
+            Ok::<String, JsValue>(json)
+        }
+        .await;
+
+        result.map(|json| JsValue::from_str(&json))
+    })
+}
+
+/// DEBUG: Fetch all Kind 444 Welcome events for debugging
+/// Returns JSON array of events with their tags
+#[wasm_bindgen]
+pub fn debug_fetch_welcome_events() -> js_sys::Promise {
+    future_to_promise(async move {
+        let result = async {
+            log("🔍 DEBUG: Fetching all Welcome events (Kind 444)...");
+
+            let client = create_connected_client().await?;
+
+            // Fetch all Kind 444 events (limit 50)
+            let filter = nostr::Filter::new()
+                .kind(Kind::Custom(444))
+                .limit(50);
+
+            let events = client.fetch_events(filter, Duration::from_secs(5)).await
+                .map_err(|e| JsValue::from_str(&format!("Failed to fetch events: {}", e)))?;
+
+            log(&format!("  Found {} Welcome events", events.len()));
+
+            // Convert events to serializable format
+            #[derive(Serialize)]
+            struct DebugEvent {
+                id: String,
+                pubkey: String,
+                created_at: u64,
+                content_len: usize,
+                tags: Vec<DebugTag>,
+            }
+
+            #[derive(Serialize)]
+            struct DebugTag {
+                kind: String,
+                content: Option<String>,
+            }
+
+            let debug_events: Vec<DebugEvent> = events.iter().map(|e| {
+                DebugEvent {
+                    id: e.id.to_hex(),
+                    pubkey: e.pubkey.to_hex(),
+                    created_at: e.created_at.as_u64(),
+                    content_len: e.content.len(),
+                    tags: e.tags.iter().map(|tag| {
+                        DebugTag {
+                            kind: tag.kind().as_str().to_string(),
+                            content: tag.content().map(|s| s.to_string()),
+                        }
+                    }).collect(),
+                }
+            }).collect();
+
+            let json = serde_json::to_string(&debug_events)
+                .map_err(|e| JsValue::from_str(&format!("JSON serialization error: {}", e)))?;
+
+            client.disconnect().await;
+
+            Ok::<String, JsValue>(json)
+        }
+        .await;
+
+        result.map(|json| JsValue::from_str(&json))
+    })
+}
+
+/// Subscribe to Welcome messages (persistent subscription for passive mode)
+/// Callback receives JSON: { group_id, group_name, kp_event_id }
+#[wasm_bindgen]
+pub fn subscribe_to_welcome_messages(callback: js_sys::Function) -> js_sys::Promise {
+    future_to_promise(async move {
+        let result = async {
+            log("📡 Subscribing to Welcome messages (Kind 444)...");
+
+            // Get our keys to filter Welcomes addressed to us
+            let keys = get_keys()?;
+            let pubkey = keys.public_key();
+
+            // Get our KeyPackage event IDs (so we can filter Welcomes)
+            let client = create_connected_client().await?;
+
+            let kp_filter = nostr::Filter::new()
+                .kind(Kind::Custom(443))
+                .author(pubkey);
+
+            let kp_events = client.fetch_events(kp_filter, Duration::from_secs(5)).await
+                .map_err(|e| JsValue::from_str(&format!("Failed to fetch KeyPackages: {}", e)))?;
+
+            let kp_event_ids: Vec<String> = kp_events.iter().map(|e| e.id.to_hex()).collect();
+            log(&format!("Found {} KeyPackage(s) to monitor", kp_event_ids.len()));
+
+            // Subscribe to Welcomes (Kind 444)
+            let filter = nostr::Filter::new()
+                .kind(Kind::Custom(444))
+                .since(nostr::Timestamp::now()); // Only new Welcomes from now
+
+            client.subscribe(filter, None).await
+                .map_err(|e| JsValue::from_str(&format!("Failed to subscribe: {}", e)))?;
+
+            log("✓ Subscribed to Welcome messages");
+
+            // Spawn background task to listen for notifications
+            wasm_bindgen_futures::spawn_local(async move {
+                log("📻 Welcome listener started");
+                let mut notifications = client.notifications();
+
+                while let Ok(notification) = notifications.recv().await {
+                    if let RelayPoolNotification::Event { relay_url, event: welcome_event, .. } = notification {
+                        log(&format!("📩 Received Welcome event: {} from {}", welcome_event.id.to_hex(), relay_url));
+
+                        // Check if this Welcome references one of our KeyPackages
+                        let kp_ref: Option<String> = welcome_event.tags.iter()
+                            .find(|tag| tag.kind().as_str() == "e" &&
+                                tag.content().map(|c| kp_event_ids.iter().any(|kp| kp == c)).unwrap_or(false))
+                            .and_then(|tag| tag.content().map(|s| s.to_string()));
+
+                        if kp_ref.is_none() {
+                            log("  Not for our KeyPackages, ignoring");
+                            continue;
+                        }
+
+                        let kp_event_id = kp_ref.unwrap();
+                        log(&format!("  ✅ Welcome references our KeyPackage: {}", &kp_event_id[..16]));
+
+                        // Process the Welcome
+                        match create_mdk().await {
+                            Ok(mdk) => {
+                                // Convert to UnsignedEvent
+                                let mut rumor = nostr::UnsignedEvent {
+                                    id: None,
+                                    pubkey: welcome_event.pubkey,
+                                    created_at: welcome_event.created_at,
+                                    kind: welcome_event.kind,
+                                    tags: welcome_event.tags.clone(),
+                                    content: welcome_event.content.clone(),
+                                };
+                                rumor.ensure_id();
+
+                                match mdk.process_welcome(&welcome_event.id, &rumor) {
+                                    Ok(group) => {
+                                        let group_id = hex::encode(group.mls_group_id.as_slice());
+                                        let group_name = group.group_name.clone();
+                                        log(&format!("✅ Processed Welcome! Joined group: {}", group_name));
+
+                                        // Call JavaScript callback with result
+                                        #[derive(Serialize)]
+                                        struct WelcomeResult {
+                                            group_id: String,
+                                            group_name: String,
+                                            kp_event_id: String,
+                                        }
+
+                                        let result = WelcomeResult {
+                                            group_id,
+                                            group_name,
+                                            kp_event_id,
+                                        };
+
+                                        if let Ok(json) = serde_json::to_string(&result) {
+                                            let js_string = JsValue::from_str(&json);
+                                            let _ = callback.call1(&JsValue::NULL, &js_string);
+                                        }
+                                    }
+                                    Err(e) => {
+                                        log(&format!("❌ Failed to process Welcome: {}", e));
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                log(&format!("❌ Failed to create MDK: {:?}", e));
+                            }
+                        }
+                    }
+                }
+            });
+
+            Ok::<(), JsValue>(())
+        }
+        .await;
+
+        result.map(|_| JsValue::NULL)
+    })
+}
+
 /// Create a new group and invite members
 /// Returns a Promise that resolves to the group ID
 #[wasm_bindgen]
@@ -1221,6 +1486,9 @@ pub fn create_group_with_members(name: String, description: String, member_npubs
             log("Creating group with MDK...");
             let mdk = create_mdk().await?;
 
+            // Clone key_package_events so we can use it later to add p tags
+            let kp_events_for_tags = key_package_events.clone();
+
             let group_result = mdk.create_group(&our_pubkey, key_package_events, config)
                 .map_err(|e| JsValue::from_str(&format!("Failed to create group: {}", e)))?;
 
@@ -1230,7 +1498,26 @@ pub fn create_group_with_members(name: String, description: String, member_npubs
             // Publish Welcome messages to each invited member
             log(&format!("Publishing {} Welcome message(s)...", group_result.welcome_rumors.len()));
 
-            for welcome_unsigned in group_result.welcome_rumors {
+            for mut welcome_unsigned in group_result.welcome_rumors {
+                // Extract recipient pubkey from the e tag (KeyPackage reference)
+                // The Welcome references a KeyPackage via e tag, and we need to add a p tag for that KeyPackage's author
+                if let Some(kp_event_id_tag) = welcome_unsigned.tags.iter().find(|t| t.kind().as_str() == "e") {
+                    if let Some(kp_event_id) = kp_event_id_tag.content() {
+                        // Find the KeyPackage event to get its author (the invitee's pubkey)
+                        if let Some(kp_event) = kp_events_for_tags.iter().find(|e| e.id.to_hex() == kp_event_id) {
+                            // Add p tag with invitee's pubkey
+                            welcome_unsigned.tags.push(nostr::Tag::public_key(kp_event.pubkey));
+                            log(&format!("  Added p tag for invitee: {}", kp_event.pubkey.to_hex()));
+
+                            // Clear the ID so it gets recalculated when signing
+                            welcome_unsigned.id = None;
+                        }
+                    }
+                }
+
+                // Ensure ID is set before signing
+                welcome_unsigned.ensure_id();
+
                 // Sign the UnsignedEvent
                 let welcome_event = welcome_unsigned.sign(&keys).await
                     .map_err(|e| JsValue::from_str(&format!("Failed to sign Welcome: {}", e)))?;
@@ -1346,7 +1633,17 @@ pub fn invite_member_to_group(group_id_hex: String, member_npub: String) -> js_s
             if let Some(welcome_rumors) = invite_result.welcome_rumors {
                 log(&format!("Publishing Welcome message to {}...", &member_npub[..16]));
 
-                for welcome_unsigned in welcome_rumors {
+                for mut welcome_unsigned in welcome_rumors {
+                    // Add p tag with invitee's pubkey so they know the Welcome is for them
+                    welcome_unsigned.tags.push(nostr::Tag::public_key(member_pubkey));
+                    log(&format!("  Added p tag for invitee: {}", member_pubkey.to_hex()));
+
+                    // Clear the ID so it gets recalculated when signing
+                    welcome_unsigned.id = None;
+
+                    // Ensure ID is set before signing
+                    welcome_unsigned.ensure_id();
+
                     let welcome_event = welcome_unsigned.sign(&keys).await
                         .map_err(|e| JsValue::from_str(&format!("Failed to sign Welcome: {}", e)))?;
 

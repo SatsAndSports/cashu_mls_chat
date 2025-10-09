@@ -11,12 +11,21 @@ cargo install wasm-pack
 
 ## Build
 
+For development (faster, use this for iterating):
+```bash
+cd web
+wasm-pack build --target web --dev
+```
+
+For production (optimized but slower):
 ```bash
 cd web
 wasm-pack build --target web
 ```
 
 This creates a `pkg/` directory with the compiled WASM module and JS glue code.
+
+**Note:** Always use `--dev` during development to avoid timeouts during the wasm-opt optimization step.
 
 ## Run
 

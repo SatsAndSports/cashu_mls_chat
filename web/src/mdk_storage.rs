@@ -306,7 +306,7 @@ impl MdkHybridStorage {
         Ok(storage)
     }
 
-    fn save_snapshot(&self) -> Result<(), JsValue> {
+    pub fn save_snapshot(&self) -> Result<(), JsValue> {
         // Save both MDK state and OpenMLS storage
         self.save_mdk_state()?;
         self.save_openmls_storage()?;
