@@ -4,6 +4,17 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>MDK Ecash Web Client</title>
+
+    <!-- PWA Meta Tags -->
+    <meta name="description" content="Encrypted group messaging with Bitcoin ecash payments">
+    <meta name="theme-color" content="#0066cc">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="MDK Ecash">
+    <link rel="manifest" href="/manifest.json">
+    <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png">
+    <link rel="apple-touch-icon" href="/icon-192.png">
+
     <!-- QR Code Scanner Library (ZXing) -->
     <script src="https://unpkg.com/@zxing/library@latest/umd/index.min.js"></script>
     <!-- QR Code Generator Library -->
@@ -4342,6 +4353,78 @@
             } catch (err) {
                 console.error('Failed to remove relay:', err);
                 alert(`Failed to remove relay: ${err}`);
+            }
+        };
+
+        // Register service worker for PWA
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('/sw.js')
+                    .then(reg => {
+                        console.log('✅ Service Worker registered:', reg.scope);
+
+                        // Check for updates every 60 seconds
+                        setInterval(() => {
+                            reg.update();
+                        }, 60000);
+
+                        // Listen for new service worker waiting
+                        reg.addEventListener('updatefound', () => {
+                            const newWorker = reg.installing;
+                            newWorker.addEventListener('statechange', () => {
+                                if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                                    // New service worker available
+                                    showUpdateNotification();
+                                }
+                            });
+                        });
+                    })
+                    .catch(err => console.error('❌ Service Worker registration failed:', err));
+            });
+
+            // Handle controller change (new service worker activated)
+            navigator.serviceWorker.addEventListener('controllerchange', () => {
+                window.location.reload();
+            });
+        }
+
+        function showUpdateNotification() {
+            const notification = document.createElement('div');
+            notification.id = 'update-notification';
+            notification.style.cssText = `
+                position: fixed;
+                top: 20px;
+                left: 50%;
+                transform: translateX(-50%);
+                background: #0066cc;
+                color: white;
+                padding: 15px 20px;
+                border-radius: 8px;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+                z-index: 10000;
+                display: flex;
+                align-items: center;
+                gap: 15px;
+                font-size: 14px;
+            `;
+            notification.innerHTML = `
+                <span>A new version is available!</span>
+                <button onclick="updateApp()" style="background: white; color: #0066cc; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: bold;">Update Now</button>
+                <button onclick="dismissUpdate()" style="background: transparent; color: white; border: 1px solid white; padding: 8px 16px; border-radius: 4px; cursor: pointer;">Later</button>
+            `;
+            document.body.appendChild(notification);
+        }
+
+        window.updateApp = function() {
+            if (navigator.serviceWorker.controller) {
+                navigator.serviceWorker.controller.postMessage({ type: 'SKIP_WAITING' });
+            }
+        };
+
+        window.dismissUpdate = function() {
+            const notification = document.getElementById('update-notification');
+            if (notification) {
+                notification.remove();
             }
         };
 
