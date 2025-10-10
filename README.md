@@ -2,12 +2,12 @@
 
 A web-based application combining **MDK (Marmot Development Kit)** for encrypted group messaging with **Cashu (CDK)** for ecash wallet functionality.
 
-Built around the hack days before and after the 2025 Bitcoin++ (Lightning) in Berlin. 
+Built around the hack days ([1](https://ecashhackday.github.io/) [2](https://c03rad0r.github.io/nostrhackday-site/)) before and after the 2025 Bitcoin++ (Lightning) in Berlin. 
 
 ## Warnings
 
 - I'm quite new to this, so don't trust your Bitcoin balance or secure comms to this hackday software 😀.
-- Sometimes, a given group just seems to break down - such that users can't see each others messages. I guess it's something about a fork in the history of the epochs. Time to read more, and to understand how to recover.
+- Sometimes, a given group just seems to break down - such that users can't see each other's messages. I guess it's something about a fork in the history of the epochs. Time to read more, and to understand how to recover.
 
 ## Features
 
