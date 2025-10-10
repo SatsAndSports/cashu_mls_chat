@@ -1968,20 +1968,22 @@
                 if (messages.length === 0) {
                     chatDiv.innerHTML = '<p style="color: #666;">No messages yet. Be the first to send one!</p>';
                 } else {
-                    // Format all messages
+                    // Format all messages (non-blocking display names)
                     const formattedMessages = await Promise.all(messages.map(async msg => {
                         const timestamp = new Date(msg.created_at * 1000).toLocaleTimeString();
-                        const displayName = await getDisplayName(msg.pubkey);
                         const formattedContent = await formatMessageContent(msg.content);
 
                         // Check if this is the current user's message
                         const isOwnMessage = msg.pubkey === currentUserPubkey;
 
+                        // Show truncated npub immediately, fetch display name in background
+                        const initialDisplayName = msg.pubkey.substring(0, 16) + '...';
+
                         return `
                         <div data-message-id="${msg.id}" style="margin-bottom: 10px; display: flex; justify-content: ${isOwnMessage ? 'flex-end' : 'flex-start'};">
                             <div style="max-width: 70%; padding: 8px; background: ${isOwnMessage ? '#dcf8c6' : 'white'}; border-radius: 8px; ${isOwnMessage ? 'border-bottom-right-radius: 2px;' : 'border-bottom-left-radius: 2px;'}">
                                 <div style="font-size: 0.85em; color: #666; margin-bottom: 4px;">
-                                    <strong style="cursor: pointer;" onclick="alert('${msg.pubkey}')" title="Click to view npub">${displayName}</strong> • ${timestamp}
+                                    <strong class="msg-author-${msg.id}" style="cursor: pointer;" onclick="alert('${msg.pubkey}')" title="Click to view npub">${initialDisplayName}</strong> • ${timestamp}
                                 </div>
                                 <div>${formattedContent}</div>
                             </div>
@@ -1989,6 +1991,15 @@
                     }));
 
                     chatDiv.innerHTML = formattedMessages.join('');
+
+                    // Fetch display names in background and update when ready
+                    messages.forEach(async msg => {
+                        const displayName = await getDisplayName(msg.pubkey);
+                        const authorElement = document.querySelector(`.msg-author-${msg.id}`);
+                        if (authorElement && displayName) {
+                            authorElement.textContent = displayName;
+                        }
+                    });
                 }
 
                 // Scroll to bottom
@@ -2021,17 +2032,19 @@
             }
 
             const timestamp = new Date(message.created_at * 1000).toLocaleTimeString();
-            const displayName = await getDisplayName(message.pubkey);
             const formattedContent = await formatMessageContent(message.content);
 
             // Check if this is the current user's message
             const isOwnMessage = message.pubkey === currentUserPubkey;
 
+            // Show truncated npub immediately
+            const initialDisplayName = message.pubkey.substring(0, 16) + '...';
+
             const messageHtml = `
             <div data-message-id="${message.id}" style="margin-bottom: 10px; display: flex; justify-content: ${isOwnMessage ? 'flex-end' : 'flex-start'};">
                 <div style="max-width: 70%; padding: 8px; background: ${isOwnMessage ? '#dcf8c6' : 'white'}; border-radius: 8px; ${isOwnMessage ? 'border-bottom-right-radius: 2px;' : 'border-bottom-left-radius: 2px;'}">
                     <div style="font-size: 0.85em; color: #666; margin-bottom: 4px;">
-                        <strong style="cursor: pointer;" onclick="alert('${message.pubkey}')" title="Click to view npub">${displayName}</strong> • ${timestamp}
+                        <strong class="msg-author-${message.id}" style="cursor: pointer;" onclick="alert('${message.pubkey}')" title="Click to view npub">${initialDisplayName}</strong> • ${timestamp}
                     </div>
                     <div>${formattedContent}</div>
                 </div>
@@ -2041,6 +2054,14 @@
 
             // Scroll to bottom
             chatDiv.scrollTop = chatDiv.scrollHeight;
+
+            // Fetch display name in background and update when ready
+            getDisplayName(message.pubkey).then(displayName => {
+                const authorElement = document.querySelector(`.msg-author-${message.id}`);
+                if (authorElement && displayName) {
+                    authorElement.textContent = displayName;
+                }
+            });
         }
 
         // Helper functions to enable/disable chat input
