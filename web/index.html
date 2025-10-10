@@ -4,8 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>MDK Ecash Web Client</title>
-    <!-- QR Code Scanner Library -->
-    <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+    <!-- QR Code Scanner Library (ZXing) -->
+    <script src="https://unpkg.com/@zxing/library@latest/umd/index.min.js"></script>
     <!-- QR Code Generator Library -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
     <style>
@@ -3050,71 +3050,71 @@
             }
         };
 
-        window.showQRScanner = function() {
+        // ZXing scanner for Lightning invoices
+        let lightningQrCodeReader = null;
+
+        window.showQRScanner = async function() {
             // If scanner is already running, just show the container
-            if (html5QrcodeScanner) {
-                console.log('Scanner already active, just showing container');
+            if (lightningQrCodeReader) {
+                console.log('Scanner already active');
                 document.getElementById('qr-scanner-container').style.display = 'block';
                 return;
             }
 
             const scannerContainer = document.getElementById('qr-scanner-container');
+            const videoElement = document.getElementById('qr-reader');
             scannerContainer.style.display = 'block';
 
             try {
-                // Clear any existing scanner
-                if (html5QrcodeScanner) {
-                    html5QrcodeScanner.clear();
-                }
+                // Create video element
+                const video = document.createElement('video');
+                video.style.width = '100%';
+                video.style.maxWidth = '400px';
+                video.style.border = '2px solid #0066cc';
+                video.style.borderRadius = '8px';
+                videoElement.innerHTML = '';
+                videoElement.appendChild(video);
 
-                // Create new scanner with built-in UI
-                html5QrcodeScanner = new Html5QrcodeScanner(
-                    "qr-reader",
-                    {
-                        fps: 10,
-                        qrbox: { width: 250, height: 250 },
-                        rememberLastUsedCamera: true
-                    },
-                    false  // verbose logging
-                );
+                // Create ZXing reader (it handles the stream itself)
+                const codeReader = new ZXing.BrowserQRCodeReader();
+                lightningQrCodeReader = codeReader;
 
-                // Render scanner with callbacks
-                html5QrcodeScanner.render(
-                    (decodedText, decodedResult) => {
-                        // Success callback - QR code scanned
-                        console.log('QR code scanned:', decodedText.substring(0, 20) + '...');
+                // Start scanning - ZXing gets the video stream automatically
+                codeReader.decodeFromVideoDevice(undefined, video, (result, err) => {
+                    if (result) {
+                        console.log('QR code scanned:', result.text.substring(0, 20) + '...');
 
                         // Strip 'lightning:' prefix if present
-                        let invoice = decodedText;
+                        let invoice = result.text;
                         if (invoice.toLowerCase().startsWith('lightning:')) {
-                            invoice = invoice.substring(10); // Remove 'lightning:' prefix
+                            invoice = invoice.substring(10);
                         }
 
                         document.getElementById('lightning-invoice-input').value = invoice;
                         decodeLightningInvoice();
                         hideQRScanner();
-                    },
-                    (errorMessage) => {
-                        // Error callback - usually just "no QR code found"
-                        // Don't log these as they're very frequent
                     }
-                );
+                });
             } catch (err) {
                 console.error('Failed to start QR scanner:', err);
-                alert('Failed to start camera: ' + err);
+                alert('Failed to start camera. Please grant camera permissions.');
                 scannerContainer.style.display = 'none';
             }
         };
 
         window.hideQRScanner = function() {
-            if (html5QrcodeScanner) {
-                html5QrcodeScanner.clear().then(() => {
-                    html5QrcodeScanner = null;
-                }).catch(err => {
-                    console.error('Error clearing scanner:', err);
-                    html5QrcodeScanner = null;
-                });
+            // Stop ZXing reader (this also stops the video stream)
+            if (lightningQrCodeReader) {
+                lightningQrCodeReader.reset();
+                lightningQrCodeReader = null;
             }
+
+            // Clear video element
+            const videoElement = document.getElementById('qr-reader');
+            if (videoElement) {
+                videoElement.innerHTML = '';
+            }
+
             document.getElementById('qr-scanner-container').style.display = 'none';
         };
 
@@ -3560,7 +3560,7 @@
         window.closeCreateGroupModal = function() {
             document.getElementById('create-group-modal').style.display = 'none';
             // Stop QR scanner if it's running
-            if (createGroupQrScanner) {
+            if (createGroupQrCodeReader) {
                 closeCreateGroupQRScanner();
             }
         };
@@ -3778,92 +3778,126 @@
             document.getElementById('invite-member-modal').style.display = 'none';
             currentGroupIdForInvite = null;
             // Stop QR scanner if it's running
-            if (inviteQrScanner) {
+            if (inviteQrCodeReader) {
                 closeInviteQRScanner();
             }
         };
 
-        // QR Scanner for Create Group
-        let createGroupQrScanner = null;
-        window.scanQRForCreateGroup = function() {
+        // ZXing scanner for Create Group
+        let createGroupQrCodeReader = null;
+
+        window.scanQRForCreateGroup = async function() {
             // If scanner is already running, just show the container
-            if (createGroupQrScanner) {
+            if (createGroupQrCodeReader) {
                 console.log('Create group scanner already active');
                 document.getElementById('create-group-qr-scanner').style.display = 'block';
                 return;
             }
 
             const container = document.getElementById('create-group-qr-scanner');
+            const videoElement = document.getElementById('create-group-qr-reader');
             container.style.display = 'block';
 
-            createGroupQrScanner = new Html5Qrcode("create-group-qr-reader");
-            createGroupQrScanner.start(
-                { facingMode: "environment" },
-                { fps: 10, qrbox: 250 },
-                (decodedText) => {
-                    if (decodedText.startsWith('npub1')) {
-                        document.getElementById('create-group-first-member').value = decodedText;
+            try {
+                // Create video element
+                const video = document.createElement('video');
+                video.style.width = '100%';
+                video.style.maxWidth = '400px';
+                video.style.border = '2px solid #0066cc';
+                video.style.borderRadius = '8px';
+                videoElement.innerHTML = '';
+                videoElement.appendChild(video);
+
+                // Create ZXing reader (it handles the stream itself)
+                const codeReader = new ZXing.BrowserQRCodeReader();
+                createGroupQrCodeReader = codeReader;
+
+                // Start scanning - ZXing gets the video stream automatically
+                codeReader.decodeFromVideoDevice(undefined, video, (result, err) => {
+                    if (result && result.text.startsWith('npub1')) {
+                        document.getElementById('create-group-first-member').value = result.text;
                         closeCreateGroupQRScanner();
                     }
-                },
-                (errorMessage) => {
-                    // Ignore errors (no QR code in frame)
-                }
-            ).catch(err => {
+                });
+            } catch (err) {
                 console.error('QR scanner error:', err);
-                alert('Failed to start camera: ' + err);
-            });
+                alert('Failed to start camera. Please grant camera permissions.');
+                container.style.display = 'none';
+            }
         };
 
         window.closeCreateGroupQRScanner = function() {
-            if (createGroupQrScanner) {
-                createGroupQrScanner.stop().then(() => {
-                    createGroupQrScanner.clear();
-                    createGroupQrScanner = null;
-                }).catch(err => console.error('Failed to stop scanner:', err));
+            // Stop ZXing reader (this also stops the video stream)
+            if (createGroupQrCodeReader) {
+                createGroupQrCodeReader.reset();
+                createGroupQrCodeReader = null;
             }
+
+            // Clear video element
+            const videoElement = document.getElementById('create-group-qr-reader');
+            if (videoElement) {
+                videoElement.innerHTML = '';
+            }
+
             document.getElementById('create-group-qr-scanner').style.display = 'none';
         };
 
-        // QR Scanner for Invite Member
-        let inviteQrScanner = null;
-        window.scanQRForInvite = function() {
+        // ZXing scanner for Invite Member
+        let inviteQrCodeReader = null;
+
+        window.scanQRForInvite = async function() {
             // If scanner is already running, just show the container
-            if (inviteQrScanner) {
+            if (inviteQrCodeReader) {
                 console.log('Invite scanner already active');
                 document.getElementById('invite-qr-scanner').style.display = 'block';
                 return;
             }
 
             const container = document.getElementById('invite-qr-scanner');
+            const videoElement = document.getElementById('invite-qr-reader');
             container.style.display = 'block';
 
-            inviteQrScanner = new Html5Qrcode("invite-qr-reader");
-            inviteQrScanner.start(
-                { facingMode: "environment" },
-                { fps: 10, qrbox: 250 },
-                (decodedText) => {
-                    if (decodedText.startsWith('npub1')) {
-                        document.getElementById('invite-member-npub').value = decodedText;
+            try {
+                // Create video element
+                const video = document.createElement('video');
+                video.style.width = '100%';
+                video.style.maxWidth = '400px';
+                video.style.border = '2px solid #0066cc';
+                video.style.borderRadius = '8px';
+                videoElement.innerHTML = '';
+                videoElement.appendChild(video);
+
+                // Create ZXing reader (it handles the stream itself)
+                const codeReader = new ZXing.BrowserQRCodeReader();
+                inviteQrCodeReader = codeReader;
+
+                // Start scanning - ZXing gets the video stream automatically
+                codeReader.decodeFromVideoDevice(undefined, video, (result, err) => {
+                    if (result && result.text.startsWith('npub1')) {
+                        document.getElementById('invite-member-npub').value = result.text;
                         closeInviteQRScanner();
                     }
-                },
-                (errorMessage) => {
-                    // Ignore errors (no QR code in frame)
-                }
-            ).catch(err => {
+                });
+            } catch (err) {
                 console.error('QR scanner error:', err);
-                alert('Failed to start camera: ' + err);
-            });
+                alert('Failed to start camera. Please grant camera permissions.');
+                container.style.display = 'none';
+            }
         };
 
         window.closeInviteQRScanner = function() {
-            if (inviteQrScanner) {
-                inviteQrScanner.stop().then(() => {
-                    inviteQrScanner.clear();
-                    inviteQrScanner = null;
-                }).catch(err => console.error('Failed to stop scanner:', err));
+            // Stop ZXing reader (this also stops the video stream)
+            if (inviteQrCodeReader) {
+                inviteQrCodeReader.reset();
+                inviteQrCodeReader = null;
             }
+
+            // Clear video element
+            const videoElement = document.getElementById('invite-qr-reader');
+            if (videoElement) {
+                videoElement.innerHTML = '';
+            }
+
             document.getElementById('invite-qr-scanner').style.display = 'none';
         };
 
