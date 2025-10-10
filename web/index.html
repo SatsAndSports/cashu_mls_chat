@@ -3051,6 +3051,13 @@
         };
 
         window.showQRScanner = function() {
+            // If scanner is already running, just show the container
+            if (html5QrcodeScanner) {
+                console.log('Scanner already active, just showing container');
+                document.getElementById('qr-scanner-container').style.display = 'block';
+                return;
+            }
+
             const scannerContainer = document.getElementById('qr-scanner-container');
             scannerContainer.style.display = 'block';
 
@@ -3076,7 +3083,14 @@
                     (decodedText, decodedResult) => {
                         // Success callback - QR code scanned
                         console.log('QR code scanned:', decodedText.substring(0, 20) + '...');
-                        document.getElementById('lightning-invoice-input').value = decodedText;
+
+                        // Strip 'lightning:' prefix if present
+                        let invoice = decodedText;
+                        if (invoice.toLowerCase().startsWith('lightning:')) {
+                            invoice = invoice.substring(10); // Remove 'lightning:' prefix
+                        }
+
+                        document.getElementById('lightning-invoice-input').value = invoice;
                         decodeLightningInvoice();
                         hideQRScanner();
                     },
@@ -3545,6 +3559,10 @@
 
         window.closeCreateGroupModal = function() {
             document.getElementById('create-group-modal').style.display = 'none';
+            // Stop QR scanner if it's running
+            if (createGroupQrScanner) {
+                closeCreateGroupQRScanner();
+            }
         };
 
         window.createGroup = async function() {
@@ -3759,11 +3777,22 @@
         window.closeInviteModal = function() {
             document.getElementById('invite-member-modal').style.display = 'none';
             currentGroupIdForInvite = null;
+            // Stop QR scanner if it's running
+            if (inviteQrScanner) {
+                closeInviteQRScanner();
+            }
         };
 
         // QR Scanner for Create Group
         let createGroupQrScanner = null;
         window.scanQRForCreateGroup = function() {
+            // If scanner is already running, just show the container
+            if (createGroupQrScanner) {
+                console.log('Create group scanner already active');
+                document.getElementById('create-group-qr-scanner').style.display = 'block';
+                return;
+            }
+
             const container = document.getElementById('create-group-qr-scanner');
             container.style.display = 'block';
 
@@ -3799,6 +3828,13 @@
         // QR Scanner for Invite Member
         let inviteQrScanner = null;
         window.scanQRForInvite = function() {
+            // If scanner is already running, just show the container
+            if (inviteQrScanner) {
+                console.log('Invite scanner already active');
+                document.getElementById('invite-qr-scanner').style.display = 'block';
+                return;
+            }
+
             const container = document.getElementById('invite-qr-scanner');
             container.style.display = 'block';
 
