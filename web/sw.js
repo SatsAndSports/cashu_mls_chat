@@ -32,6 +32,44 @@ self.addEventListener('message', event => {
   }
 });
 
+// Handle notification clicks
+self.addEventListener('notificationclick', event => {
+  console.log('[Service Worker] Notification clicked:', event.notification.tag);
+  event.notification.close();
+
+  // Get the notification data
+  const data = event.notification.data;
+
+  // Determine the URL to open
+  let targetUrl = '/';
+  if (data && data.groupId && data.groupName) {
+    // Format: #chat:groupId:groupName
+    targetUrl = `/#chat:${data.groupId}:${encodeURIComponent(data.groupName)}`;
+  }
+
+  // Open or focus the app window
+  event.waitUntil(
+    clients.matchAll({ type: 'window', includeUncontrolled: true }).then(windowClients => {
+      // Check if there's already a window open
+      for (let client of windowClients) {
+        if ('focus' in client) {
+          client.focus();
+          // Navigate to the target URL
+          client.postMessage({
+            type: 'NAVIGATE',
+            url: targetUrl
+          });
+          return;
+        }
+      }
+      // If no window is open, open a new one
+      if (clients.openWindow) {
+        return clients.openWindow(targetUrl);
+      }
+    })
+  );
+});
+
 // Activate service worker and clean up old caches
 self.addEventListener('activate', event => {
   console.log('[Service Worker] Activating...');

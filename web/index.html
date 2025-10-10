@@ -289,6 +289,52 @@
         #sidebar-overlay.active {
             display: block;
         }
+
+        /* Toggle switch styles */
+        .toggle-switch {
+            position: relative;
+            display: inline-block;
+            width: 50px;
+            height: 28px;
+        }
+
+        .toggle-switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .toggle-slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #ccc;
+            transition: .4s;
+            border-radius: 28px;
+        }
+
+        .toggle-slider:before {
+            position: absolute;
+            content: "";
+            height: 20px;
+            width: 20px;
+            left: 4px;
+            bottom: 4px;
+            background-color: white;
+            transition: .4s;
+            border-radius: 50%;
+        }
+
+        .toggle-switch input:checked + .toggle-slider {
+            background-color: #0066cc;
+        }
+
+        .toggle-switch input:checked + .toggle-slider:before {
+            transform: translateX(22px);
+        }
     </style>
 </head>
 <body>
@@ -309,6 +355,7 @@
                 <div id="sidebar-balance" class="wallet-balance">...</div>
             </div>
             <div class="nav-item" onclick="showSection('groups', event)">📱 Groups</div>
+            <div class="nav-item" onclick="showSection('settings', event)">⚙️ Settings</div>
         </div>
 
         <!-- Content Area -->
@@ -455,6 +502,34 @@
                     <button onclick="addRelay()">➕ Add Relay</button>
                 </div>
                 <div id="relay-add-status" style="margin-top: 10px;"></div>
+            </div>
+
+            <!-- Settings Section -->
+            <div id="settings-section" class="section">
+                <h2>⚙️ Settings</h2>
+
+                <h3 style="margin-top: 20px;">Notifications</h3>
+                <p>Get notified when new messages arrive or when you're added to groups.</p>
+
+                <div style="background: #f5f5f5; padding: 15px; border-radius: 8px; margin: 15px 0;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                        <div>
+                            <strong>Enable Notifications</strong>
+                            <div style="font-size: 0.9em; color: #666; margin-top: 3px;">
+                                New messages and group invites
+                            </div>
+                        </div>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="notifications-toggle" onchange="toggleNotifications()">
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                    <div id="notification-status" style="margin-top: 10px; font-size: 0.9em;"></div>
+                </div>
+
+                <div id="notification-test-section" style="display: none; margin-top: 15px;">
+                    <button onclick="testNotification()">🔔 Send Test Notification</button>
+                </div>
             </div>
         </div>
     </div>
@@ -1230,6 +1305,9 @@
                 // Start auto-subscription to Welcome messages
                 await initializeWelcomeSubscription();
 
+                // Initialize notifications
+                await initializeNotifications();
+
                 document.getElementById('buttons').style.display = 'block';
                 document.getElementById('status').innerHTML = '';
 
@@ -1289,6 +1367,97 @@
                 if (document.getElementById(`${hash}-section`)) {
                     showSection(hash, null, true); // skipHashUpdate=true
                 }
+            }
+        }
+
+        // Notification functions
+        let notificationsEnabled = false;
+
+        async function initializeNotifications() {
+            // Check if notifications are already enabled in localStorage
+            const enabled = localStorage.getItem('notifications_enabled') === 'true';
+            const toggle = document.getElementById('notifications-toggle');
+
+            if (enabled && 'Notification' in window && Notification.permission === 'granted') {
+                notificationsEnabled = true;
+                toggle.checked = true;
+                updateNotificationStatus('✅ Notifications enabled');
+                document.getElementById('notification-test-section').style.display = 'block';
+            } else {
+                updateNotificationStatus('Notifications are disabled');
+            }
+        }
+
+        window.toggleNotifications = async function() {
+            const toggle = document.getElementById('notifications-toggle');
+
+            if (!('Notification' in window)) {
+                updateNotificationStatus('❌ This browser does not support notifications');
+                toggle.checked = false;
+                return;
+            }
+
+            if (toggle.checked) {
+                // Request permission
+                updateNotificationStatus('Requesting permission...');
+                const permission = await Notification.requestPermission();
+
+                if (permission === 'granted') {
+                    notificationsEnabled = true;
+                    localStorage.setItem('notifications_enabled', 'true');
+                    updateNotificationStatus('✅ Notifications enabled');
+                    document.getElementById('notification-test-section').style.display = 'block';
+
+                    // Show welcome notification
+                    showNotification('Notifications Enabled', {
+                        body: 'You will now be notified of new messages and group invites',
+                        icon: '/icon-192.png'
+                    });
+                } else {
+                    notificationsEnabled = false;
+                    toggle.checked = false;
+                    updateNotificationStatus('❌ Permission denied. Please enable notifications in your browser settings.');
+                    localStorage.setItem('notifications_enabled', 'false');
+                }
+            } else {
+                // Disable notifications
+                notificationsEnabled = false;
+                localStorage.setItem('notifications_enabled', 'false');
+                updateNotificationStatus('Notifications disabled');
+                document.getElementById('notification-test-section').style.display = 'none';
+            }
+        };
+
+        function updateNotificationStatus(message) {
+            document.getElementById('notification-status').innerHTML =
+                `<div style="color: #666;">${message}</div>`;
+        }
+
+        window.testNotification = function() {
+            showNotification('Test Notification', {
+                body: 'This is a test notification from MDK Ecash',
+                icon: '/icon-192.png'
+            });
+        };
+
+        function showNotification(title, options) {
+            if (!notificationsEnabled || !('Notification' in window) || Notification.permission !== 'granted') {
+                return;
+            }
+
+            // Check if service worker is available for better notifications
+            if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
+                navigator.serviceWorker.ready.then(registration => {
+                    registration.showNotification(title, {
+                        ...options,
+                        badge: '/icon-192.png',
+                        tag: options.tag || 'mdk-notification',
+                        requireInteraction: false
+                    });
+                });
+            } else {
+                // Fallback to regular notification
+                new Notification(title, options);
             }
         }
 
@@ -2047,6 +2216,38 @@
 
             // Check if this is the current user's message
             const isOwnMessage = message.pubkey === currentUserPubkey;
+
+            // Show notification for new messages from others
+            if (!isOwnMessage && currentChatGroupId) {
+                const displayName = await getDisplayName(message.pubkey);
+                const author = displayName || (message.pubkey.substring(0, 16) + '...');
+
+                // Get group name
+                let groupName = 'Group Chat';
+                try {
+                    const groupsJson = await get_groups();
+                    const groups = JSON.parse(groupsJson);
+                    const group = groups.find(g => g.id === currentChatGroupId);
+                    if (group) {
+                        groupName = group.name;
+                    }
+                } catch (err) {
+                    console.error('Failed to get group name for notification:', err);
+                }
+
+                // Extract preview text (remove HTML tags, limit length)
+                const contentPreview = formattedContent.replace(/<[^>]*>/g, '').substring(0, 100);
+
+                showNotification(`${author} in ${groupName}`, {
+                    body: contentPreview,
+                    icon: '/icon-192.png',
+                    tag: `message-${currentChatGroupId}`,
+                    data: {
+                        groupId: currentChatGroupId,
+                        groupName: groupName
+                    }
+                });
+            }
 
             // Show truncated npub immediately
             const initialDisplayName = message.pubkey.substring(0, 16) + '...';
@@ -2875,8 +3076,19 @@
                     // Refresh KeyPackage list
                     await refreshKeyPackageList();
 
-                    // Show notification
+                    // Show toast notification
                     showToast(`🎉 Joined group: ${result.group_name}`);
+
+                    // Show system notification
+                    showNotification('Welcome to a new group!', {
+                        body: `You've been added to: ${result.group_name}`,
+                        icon: '/icon-192.png',
+                        tag: `welcome-${result.group_id}`,
+                        data: {
+                            groupId: result.group_id,
+                            groupName: result.group_name
+                        }
+                    });
                 });
 
                 console.log("✓ Welcome subscription active");
@@ -4385,6 +4597,19 @@
             // Handle controller change (new service worker activated)
             navigator.serviceWorker.addEventListener('controllerchange', () => {
                 window.location.reload();
+            });
+
+            // Listen for navigation messages from service worker (notification clicks)
+            navigator.serviceWorker.addEventListener('message', event => {
+                if (event.data && event.data.type === 'NAVIGATE') {
+                    const url = event.data.url;
+                    if (url.startsWith('/#')) {
+                        window.location.hash = url.substring(2); // Remove /#
+                        // The hashchange listener will handle navigation
+                    } else {
+                        window.location.href = url;
+                    }
+                }
             });
         }
 
