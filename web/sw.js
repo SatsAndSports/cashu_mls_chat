@@ -1,5 +1,5 @@
 // Service Worker for MDK Ecash PWA
-const CACHE_NAME = 'mdk-ecash-v2';
+const CACHE_NAME = 'mdk-ecash-v3';
 const urlsToCache = [
   '/',
   '/index.html',
@@ -32,8 +32,33 @@ self.addEventListener('message', event => {
   }
 });
 
+// Helper to get group name from IndexedDB
+async function getGroupName(groupId) {
+  try {
+    const db = await new Promise((resolve, reject) => {
+      const request = indexedDB.open('mdk-groups', 1);
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => resolve(request.result);
+    });
+
+    const tx = db.transaction('group-names', 'readonly');
+    const store = tx.objectStore('group-names');
+
+    const result = await new Promise((resolve, reject) => {
+      const request = store.get(groupId);
+      request.onsuccess = () => resolve(request.result?.groupName || null);
+      request.onerror = () => reject(request.error);
+    });
+
+    return result;
+  } catch (err) {
+    console.error('[Service Worker] Failed to get group name:', err);
+    return null;
+  }
+}
+
 // Handle push events
-self.addEventListener('push', event => {
+self.addEventListener('push', async event => {
   console.log('[Service Worker] Push received');
 
   let data = {};
@@ -46,19 +71,44 @@ self.addEventListener('push', event => {
     }
   }
 
-  const title = data.title || 'MDK Ecash';
-  const options = {
-    body: data.body || 'You have a new notification',
-    icon: data.icon || '/icon-192.png',
-    badge: '/icon-192.png',
-    tag: data.tag || 'mdk-notification',
-    data: data.data || {},
-    requireInteraction: false
+  // If this is a group message, look up the group name
+  const processNotification = async () => {
+    let title = data.title || 'MDK Ecash';
+    let body = data.body || 'You have a new notification';
+    let notificationData = data.data || {};
+
+    // If we have a groupId, look up the friendly name
+    if (notificationData.groupId) {
+      const groupName = await getGroupName(notificationData.groupId);
+      if (groupName) {
+        // Format: "Message in 'Group Name' [relay]"
+        title = 'New message';
+        body = `Message in '${groupName}'`;
+
+        // Add relay if available
+        if (notificationData.relay) {
+          const relayDomain = notificationData.relay.replace('wss://', '').replace('ws://', '').split('/')[0];
+          body += ` [${relayDomain}]`;
+        }
+
+        // Add groupName to data for click handler
+        notificationData.groupName = groupName;
+      }
+    }
+
+    const options = {
+      body: body,
+      icon: data.icon || '/icon-192.png',
+      badge: '/icon-192.png',
+      tag: data.tag || 'mdk-notification',
+      data: notificationData,
+      requireInteraction: false
+    };
+
+    await self.registration.showNotification(title, options);
   };
 
-  event.waitUntil(
-    self.registration.showNotification(title, options)
-  );
+  event.waitUntil(processNotification());
 });
 
 // Handle notification clicks

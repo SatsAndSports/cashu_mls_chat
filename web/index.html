@@ -546,6 +546,10 @@
                 <div id="notification-test-section" style="display: none; margin-top: 15px;">
                     <button onclick="testNotification()">🔔 Send Test Notification</button>
                 </div>
+
+                <div style="margin-top: 40px; padding-top: 20px; border-top: 1px solid #e0e0e0; text-align: center; font-size: 0.85em; color: #999;">
+                    MDK Ecash v<span id="app-version"></span>
+                </div>
             </div>
         </div>
     </div>
@@ -1167,6 +1171,7 @@
         } from './pkg/mdk_ecash_web.js';
 
         let wasm;
+        const APP_VERSION = '0.3.0'; // Matches service worker v3
 
         // Unread message tracking
         function getLastReadAt(groupId) {
@@ -1316,6 +1321,9 @@
                 await initializeWallet();
                 await initializeGroups();
 
+                // Sync group names to IndexedDB for service worker access
+                await syncGroupNamesToIndexedDB();
+
                 // Initialize KeyPackages
                 document.getElementById('keypackages-container').style.display = 'block';
                 await refreshKeyPackageList();
@@ -1385,6 +1393,78 @@
                 if (document.getElementById(`${hash}-section`)) {
                     showSection(hash, null, true); // skipHashUpdate=true
                 }
+            }
+        }
+
+        // IndexedDB for group name mappings (accessible to service worker)
+        const DB_NAME = 'mdk-groups';
+        const DB_VERSION = 1;
+        const STORE_NAME = 'group-names';
+
+        async function openGroupDB() {
+            return new Promise((resolve, reject) => {
+                const request = indexedDB.open(DB_NAME, DB_VERSION);
+
+                request.onerror = () => reject(request.error);
+                request.onsuccess = () => resolve(request.result);
+
+                request.onupgradeneeded = (event) => {
+                    const db = event.target.result;
+                    if (!db.objectStoreNames.contains(STORE_NAME)) {
+                        // Create object store with groupId as key
+                        db.createObjectStore(STORE_NAME, { keyPath: 'groupId' });
+                    }
+                };
+            });
+        }
+
+        async function saveGroupNameMapping(groupId, groupName) {
+            try {
+                const db = await openGroupDB();
+                const tx = db.transaction(STORE_NAME, 'readwrite');
+                const store = tx.objectStore(STORE_NAME);
+
+                await store.put({ groupId, groupName });
+
+                console.log(`📝 Saved group name mapping: ${groupId.substring(0, 16)}... → ${groupName}`);
+            } catch (err) {
+                console.error('Failed to save group name mapping:', err);
+            }
+        }
+
+        async function getGroupNameMapping(groupId) {
+            try {
+                const db = await openGroupDB();
+                const tx = db.transaction(STORE_NAME, 'readonly');
+                const store = tx.objectStore(STORE_NAME);
+
+                return new Promise((resolve, reject) => {
+                    const request = store.get(groupId);
+                    request.onsuccess = () => resolve(request.result?.groupName || null);
+                    request.onerror = () => reject(request.error);
+                });
+            } catch (err) {
+                console.error('Failed to get group name mapping:', err);
+                return null;
+            }
+        }
+
+        async function syncGroupNamesToIndexedDB() {
+            try {
+                const groupsJson = await get_groups();
+                const groups = JSON.parse(groupsJson);
+
+                console.log(`🔄 Syncing ${groups.length} group names to IndexedDB...`);
+
+                for (const group of groups) {
+                    // Use nostr_group_id as key (that's what push server sends)
+                    const groupId = group.nostr_group_id || group.id;
+                    await saveGroupNameMapping(groupId, group.name);
+                }
+
+                console.log('✅ Group name sync complete');
+            } catch (err) {
+                console.error('Failed to sync group names:', err);
             }
         }
 
@@ -1570,6 +1650,9 @@
             // Load push server URL (with default)
             const pushServerUrl = localStorage.getItem('push_server_url') || DEFAULT_PUSH_SERVER;
             document.getElementById('push-server-url').value = pushServerUrl;
+
+            // Display app version
+            document.getElementById('app-version').textContent = APP_VERSION;
         }
 
         window.savePushServerUrl = async function() {
@@ -3248,6 +3331,9 @@
                     // Refresh groups list
                     await refreshGroups();
 
+                    // Sync new group name to IndexedDB
+                    await syncGroupNamesToIndexedDB();
+
                     // Refresh KeyPackage list
                     await refreshKeyPackageList();
 
@@ -4145,6 +4231,9 @@
                 // Close create group modal and refresh
                 closeCreateGroupModal();
                 await refreshGroups();
+
+                // Sync new group name to IndexedDB
+                await syncGroupNamesToIndexedDB();
             } catch (err) {
                 console.error('Failed to create group:', err);
 
