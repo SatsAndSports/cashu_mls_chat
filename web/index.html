@@ -1171,7 +1171,7 @@
         } from './pkg/mdk_ecash_web.js';
 
         let wasm;
-        const APP_VERSION = '0.3.0'; // Matches service worker v3
+        const APP_VERSION = '0.3.1'; // Matches service worker v3.1
 
         // Unread message tracking
         function getLastReadAt(groupId) {
@@ -4833,6 +4833,9 @@
         };
 
         // Register service worker for PWA
+        // Store reference to waiting service worker
+        let waitingServiceWorker = null;
+
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
                 navigator.serviceWorker.register('/sw.js')
@@ -4850,6 +4853,7 @@
                             newWorker.addEventListener('statechange', () => {
                                 if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
                                     // New service worker available
+                                    waitingServiceWorker = newWorker;
                                     showUpdateNotification();
                                 }
                             });
@@ -4860,6 +4864,7 @@
 
             // Handle controller change (new service worker activated)
             navigator.serviceWorker.addEventListener('controllerchange', () => {
+                console.log('🔄 New service worker activated, reloading page...');
                 window.location.reload();
             });
 
@@ -4905,8 +4910,17 @@
         }
 
         window.updateApp = function() {
-            if (navigator.serviceWorker.controller) {
-                navigator.serviceWorker.controller.postMessage({ type: 'SKIP_WAITING' });
+            if (waitingServiceWorker) {
+                console.log('📤 Sending SKIP_WAITING to new service worker...');
+                waitingServiceWorker.postMessage({ type: 'SKIP_WAITING' });
+
+                // Update button to show it's working
+                const notification = document.getElementById('update-notification');
+                if (notification) {
+                    notification.innerHTML = '<span>Updating...</span>';
+                }
+            } else {
+                console.error('❌ No waiting service worker found');
             }
         };
 
