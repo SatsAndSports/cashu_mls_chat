@@ -11,11 +11,29 @@ const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY;
 const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY;
 const VAPID_SUBJECT = process.env.VAPID_SUBJECT || 'mailto:admin@example.com';
 
+// Logging configuration
+// Levels: 'silent', 'error', 'info', 'debug'
+const LOG_LEVEL = process.env.LOG_LEVEL || 'info';
+const LOG_LEVELS = { silent: 0, error: 1, info: 2, debug: 3 };
+const currentLogLevel = LOG_LEVELS[LOG_LEVEL] || LOG_LEVELS.info;
+
+const logger = {
+  error: (...args) => {
+    if (currentLogLevel >= LOG_LEVELS.error) console.error(...args);
+  },
+  info: (...args) => {
+    if (currentLogLevel >= LOG_LEVELS.info) console.log(...args);
+  },
+  debug: (...args) => {
+    if (currentLogLevel >= LOG_LEVELS.debug) console.log(...args);
+  }
+};
+
 // Validate VAPID keys
 if (!VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY) {
-  console.error('ERROR: VAPID keys not configured!');
-  console.error('Run: npm run generate-vapid');
-  console.error('Then add keys to .env file');
+  logger.error('ERROR: VAPID keys not configured!');
+  logger.error('Run: npm run generate-vapid');
+  logger.error('Then add keys to .env file');
   process.exit(1);
 }
 
@@ -51,7 +69,7 @@ setInterval(() => {
     }
   }
   if (sentNotifications.size > 0) {
-    console.log(`🧹 Cleaned up old notification tracking entries. Current size: ${sentNotifications.size}`);
+    logger.debug(`🧹 Cleaned up old notification tracking entries. Current size: ${sentNotifications.size}`);
   }
 }, 5 * 60 * 1000);
 
@@ -61,7 +79,7 @@ function connectToRelay(relayUrl) {
     return relayConnections.get(relayUrl);
   }
 
-  console.log(`📡 Connecting to relay: ${relayUrl}`);
+  logger.debug(`📡 Connecting to relay: ${relayUrl}`);
 
   const ws = new WebSocket(relayUrl);
   const relay = {
@@ -72,7 +90,7 @@ function connectToRelay(relayUrl) {
   };
 
   ws.on('open', () => {
-    console.log(`✅ Connected to ${relayUrl}`);
+    logger.debug(`✅ Connected to ${relayUrl}`);
     relay.connected = true;
     updateRelaySubscriptions(relay);
   });
@@ -82,19 +100,19 @@ function connectToRelay(relayUrl) {
   });
 
   ws.on('close', () => {
-    console.log(`❌ Disconnected from ${relayUrl}`);
+    logger.debug(`❌ Disconnected from ${relayUrl}`);
     relay.connected = false;
     relayConnections.delete(relayUrl);
 
     // Reconnect after 5 seconds
     setTimeout(() => {
-      console.log(`🔄 Reconnecting to ${relayUrl}...`);
+      logger.debug(`🔄 Reconnecting to ${relayUrl}...`);
       connectToRelay(relayUrl);
     }, 5000);
   });
 
   ws.on('error', (err) => {
-    console.error(`Error with ${relayUrl}:`, err.message);
+    logger.error(`Error with ${relayUrl}:`, err.message);
   });
 
   relayConnections.set(relayUrl, relay);
@@ -115,7 +133,7 @@ function updateRelaySubscriptions(relay) {
   }
 
   if (allGroupIds.size === 0 && allUserPubkeys.size === 0) {
-    console.log(`No active subscriptions for ${relay.url}`);
+    logger.debug(`No active subscriptions for ${relay.url}`);
     return;
   }
 
@@ -146,8 +164,8 @@ function updateRelaySubscriptions(relay) {
   const subscribeMsg = JSON.stringify(['REQ', subId, ...filters]);
   relay.ws.send(subscribeMsg);
 
-  console.log(`📬 Subscribed to ${allGroupIds.size} groups and ${allUserPubkeys.size} users on ${relay.url}`);
-  console.log(`   Filter: ${JSON.stringify(filters)}`);
+  logger.debug(`📬 Subscribed to ${allGroupIds.size} groups and ${allUserPubkeys.size} users on ${relay.url}`);
+  logger.debug(`   Filter: ${JSON.stringify(filters)}`);
 }
 
 // Handle message from Nostr relay
@@ -156,19 +174,19 @@ function handleRelayMessage(relay, data) {
     const msg = JSON.parse(data.toString());
 
     // Debug: log all message types
-    console.log(`[${relay.url}] Received: ${msg[0]}`);
+    logger.debug(`[${relay.url}] Received: ${msg[0]}`);
 
     if (msg[0] === 'EVENT') {
       const event = msg[2];
-      console.log(`[${relay.url}] EVENT kind=${event.kind} id=${event.id.substring(0, 8)}...`);
+      logger.debug(`[${relay.url}] EVENT kind=${event.kind} id=${event.id.substring(0, 8)}...`);
       handleNostrEvent(event, relay);
     } else if (msg[0] === 'EOSE') {
-      console.log(`[${relay.url}] End of stored events`);
+      logger.debug(`[${relay.url}] End of stored events`);
     } else if (msg[0] === 'NOTICE') {
-      console.log(`[${relay.url}] NOTICE: ${msg[1]}`);
+      logger.debug(`[${relay.url}] NOTICE: ${msg[1]}`);
     }
   } catch (err) {
-    console.error('Error parsing relay message:', err.message);
+    logger.error('Error parsing relay message:', err.message);
   }
 }
 
@@ -191,7 +209,7 @@ async function handleGroupMessage(event, relay) {
 
   const groupId = hTag[1];
 
-  console.log(`📨 New message in group ${groupId.substring(0, 16)}... from ${relay.url}`);
+  logger.debug(`📨 New message in group ${groupId.substring(0, 16)}... from ${relay.url}`);
 
   // Format timestamp
   const timestamp = new Date(event.created_at * 1000);
@@ -212,7 +230,7 @@ async function handleGroupMessage(event, relay) {
     const notificationKey = `${event.id}:${pubkey}`;
     if (sentNotifications.has(notificationKey)) {
       const firstRelay = sentNotifications.get(notificationKey).relay;
-      console.log(`  ⏭️  Skipping duplicate (already sent via ${firstRelay})`);
+      logger.debug(`  ⏭️  Skipping duplicate (already sent via ${firstRelay})`);
       continue;
     }
 
@@ -245,12 +263,12 @@ async function handleWelcomeMessage(event, relay) {
 
   const recipientPubkey = pTag[1];
 
-  console.log(`💌 Welcome message for ${recipientPubkey.substring(0, 16)}... from ${relay.url}`);
+  logger.debug(`💌 Welcome message for ${recipientPubkey.substring(0, 16)}... from ${relay.url}`);
 
   // Check if this user is subscribed
   const userData = subscriptions.get(recipientPubkey);
   if (!userData) {
-    console.log(`  User not subscribed, skipping`);
+    logger.debug(`  User not subscribed, skipping`);
     return;
   }
 
@@ -258,7 +276,7 @@ async function handleWelcomeMessage(event, relay) {
   const notificationKey = `${event.id}:${recipientPubkey}`;
   if (sentNotifications.has(notificationKey)) {
     const firstRelay = sentNotifications.get(notificationKey).relay;
-    console.log(`  ⏭️  Skipping duplicate (already sent via ${firstRelay})`);
+    logger.debug(`  ⏭️  Skipping duplicate (already sent via ${firstRelay})`);
     return;
   }
 
@@ -292,13 +310,13 @@ async function handleWelcomeMessage(event, relay) {
 async function sendPushNotification(pubkey, subscription, payload) {
   try {
     await webpush.sendNotification(subscription, JSON.stringify(payload));
-    console.log(`✅ Push sent to ${pubkey.substring(0, 16)}...`);
+    logger.debug(`✅ Push sent to ${pubkey.substring(0, 16)}...`);
   } catch (err) {
-    console.error(`❌ Failed to send push to ${pubkey.substring(0, 16)}...:`, err.message);
+    logger.error(`❌ Failed to send push to ${pubkey.substring(0, 16)}...:`, err.message);
 
     // Remove invalid subscriptions
     if (err.statusCode === 410) {
-      console.log(`🗑️  Removing expired subscription for ${pubkey.substring(0, 16)}...`);
+      logger.debug(`🗑️  Removing expired subscription for ${pubkey.substring(0, 16)}...`);
       subscriptions.delete(pubkey);
       updateAllRelaySubscriptions();
     }
@@ -339,7 +357,7 @@ app.post('/subscribe', (req, res) => {
     subscriptionTimestamp: Date.now()
   });
 
-  console.log(`📝 New subscription from ${pubkey.substring(0, 16)}... for ${groupIds.length} groups on ${relays.length} relays`);
+  logger.debug(`📝 New subscription from ${pubkey.substring(0, 16)}... for ${groupIds.length} groups on ${relays.length} relays`);
 
   // Connect to relays if needed
   relays.forEach(relayUrl => {
@@ -363,7 +381,7 @@ app.post('/unsubscribe', (req, res) => {
   }
 
   subscriptions.delete(pubkey);
-  console.log(`🗑️  Unsubscribed ${pubkey.substring(0, 16)}...`);
+  logger.debug(`🗑️  Unsubscribed ${pubkey.substring(0, 16)}...`);
 
   // Update relay subscriptions
   updateAllRelaySubscriptions();
@@ -400,27 +418,27 @@ app.get('/stats', (req, res) => {
 
 // Start server
 app.listen(PORT, () => {
-  console.log('='.repeat(60));
-  console.log('🚀 MDK Ecash Push Server');
-  console.log('='.repeat(60));
-  console.log(`📍 Listening on port ${PORT}`);
-  console.log(`🔑 VAPID public key: ${VAPID_PUBLIC_KEY.substring(0, 20)}...`);
-  console.log('='.repeat(60));
-  console.log(`📡 Waiting for client subscriptions to connect to relays...`);
-  console.log('='.repeat(60));
+  logger.debug('='.repeat(60));
+  logger.debug('🚀 MDK Ecash Push Server');
+  logger.debug('='.repeat(60));
+  logger.debug(`📍 Listening on port ${PORT}`);
+  logger.debug(`🔑 VAPID public key: ${VAPID_PUBLIC_KEY.substring(0, 20)}...`);
+  logger.debug('='.repeat(60));
+  logger.debug(`📡 Waiting for client subscriptions to connect to relays...`);
+  logger.debug('='.repeat(60));
 
-  console.log(`\n✅ Server ready! API endpoints:`);
-  console.log(`   GET  /vapid-public-key - Get public key for client`);
-  console.log(`   POST /subscribe        - Register push subscription (includes relays)`);
-  console.log(`   POST /unsubscribe      - Remove push subscription`);
-  console.log(`   GET  /health           - Health check`);
-  console.log(`   GET  /stats            - Server statistics`);
-  console.log('');
+  logger.debug(`\n✅ Server ready! API endpoints:`);
+  logger.debug(`   GET  /vapid-public-key - Get public key for client`);
+  logger.debug(`   POST /subscribe        - Register push subscription (includes relays)`);
+  logger.debug(`   POST /unsubscribe      - Remove push subscription`);
+  logger.debug(`   GET  /health           - Health check`);
+  logger.debug(`   GET  /stats            - Server statistics`);
+  logger.debug('');
 });
 
 // Graceful shutdown
 process.on('SIGTERM', () => {
-  console.log('\n🛑 Shutting down gracefully...');
+  logger.debug('\n🛑 Shutting down gracefully...');
 
   // Close all relay connections
   for (const relay of relayConnections.values()) {
