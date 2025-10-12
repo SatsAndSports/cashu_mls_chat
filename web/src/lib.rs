@@ -3382,7 +3382,7 @@ pub fn subscribe_to_group_messages(group_id_hex: String, callback: js_sys::Funct
             log(&format!("  Filtering by nostr_group_id: {}", &nostr_group_id_hex[..16]));
 
             // Create client and connect to relays
-            let client = create_connected_client().await?;
+            let client = Arc::new(create_connected_client().await?);
             log("  ✓ Connected to relays");
 
             // Subscribe to MLS group messages (kind 445) filtered by this specific group
@@ -3405,19 +3405,18 @@ pub fn subscribe_to_group_messages(group_id_hex: String, callback: js_sys::Funct
                     .custom_tag(nostr::SingleLetterTag::lowercase(nostr::Alphabet::H), nostr_group_id_hex)
             };
 
-            log("  Subscribing to MLS group messages (kind 445)...");
-            client.subscribe(filter, None).await
-                .map_err(|e| JsValue::from_str(&format!("Failed to subscribe: {}", e)))?;
-            log("  ✓ Subscribed successfully");
+            log("  Subscribing to MLS group messages (kind 445) with ordered history...");
 
-            // Spawn a background task to listen for notifications
+            // Spawn a background task to listen for notifications with ordered history
+            let client_clone = client.clone();
             wasm_bindgen_futures::spawn_local(async move {
-                log("  📻 Starting notification listener...");
-                let mut notifications = client.notifications();
+                log("  📻 Starting notification listener with ordered history...");
 
-                while let Ok(notification) = notifications.recv().await {
-                    if let RelayPoolNotification::Event { relay_url, event, .. } = notification {
-                        log(&format!("  📩 Received event: {} from relay: {}", event.id.to_hex(), relay_url));
+                let result = subscribe_with_ordered_history(&client_clone, filter, move |event| {
+                    let callback_clone = callback.clone();
+                    let group_id_clone = group_id.clone();
+                    async move {
+                        log(&format!("  📩 Processing event: {}", event.id.to_hex()));
 
                         // Create MDK instance and process the message
                         match create_mdk().await {
@@ -3426,13 +3425,13 @@ pub fn subscribe_to_group_messages(group_id_hex: String, callback: js_sys::Funct
                                     Ok(result) => {
                                         use mdk_core::prelude::MessageProcessingResult;
                                         if let MessageProcessingResult::ApplicationMessage(msg) = result {
-                                            log(&format!("  ✅ Application message: '{}' (from {})", msg.content, relay_url));
+                                            log(&format!("  ✅ Application message: '{}'", msg.content));
                                             log(&format!("     Message group ID: {}", hex::encode(msg.mls_group_id.as_slice())));
-                                            log(&format!("     Target group ID: {}", hex::encode(group_id.as_slice())));
+                                            log(&format!("     Target group ID: {}", hex::encode(group_id_clone.as_slice())));
 
                                             // Check if this message belongs to the current group
-                                            if msg.mls_group_id == group_id {
-                                                log(&format!("  🎯 Message matches current group! (delivered by {})", relay_url));
+                                            if msg.mls_group_id == group_id_clone {
+                                                log("  🎯 Message matches current group!");
 
                                                 // Prepare callback data
                                                 let msg_data = MessageCallback {
@@ -3445,7 +3444,7 @@ pub fn subscribe_to_group_messages(group_id_hex: String, callback: js_sys::Funct
 
                                                 // Call the JavaScript callback
                                                 if let Ok(js_value) = serde_wasm_bindgen::to_value(&msg_data) {
-                                                    match callback.call1(&JsValue::NULL, &js_value) {
+                                                    match callback_clone.call1(&JsValue::NULL, &js_value) {
                                                         Ok(_) => log("  ✅ Callback invoked successfully"),
                                                         Err(e) => log(&format!("  ❌ Callback failed: {:?}", e)),
                                                     }
@@ -3498,7 +3497,13 @@ pub fn subscribe_to_group_messages(group_id_hex: String, callback: js_sys::Funct
                                 log(&format!("  ⚠️  Failed to create MDK: {:?}", e));
                             }
                         }
+
+                        Ok(())
                     }
+                }).await;
+
+                if let Err(e) = result {
+                    log(&format!("❌ Group message subscription error: {:?}", e));
                 }
             });
 
