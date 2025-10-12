@@ -6,6 +6,7 @@ use web_sys::{window, Storage};
 use std::sync::Arc;
 use std::str::FromStr;
 use std::time::Duration;
+use std::collections::HashSet;
 use serde::{Serialize, Deserialize};
 use once_cell::sync::Lazy;
 use tokio::sync::Mutex as TokioMutex;
@@ -217,6 +218,71 @@ fn get_local_storage() -> Result<Storage, JsValue> {
         .ok_or_else(|| JsValue::from_str("No window object"))?
         .local_storage()?
         .ok_or_else(|| JsValue::from_str("No localStorage available"))
+}
+
+/// Helper for ordered event subscriptions
+/// Collects historical events until EOSE, sorts by created_at (oldest first),
+/// processes them in order, then continues with real-time events
+async fn subscribe_with_ordered_history<F, Fut>(
+    client: &Client,
+    filter: Filter,
+    event_handler: F,
+) -> Result<(), JsValue>
+where
+    F: Fn(Box<nostr::Event>) -> Fut + Clone + 'static,
+    Fut: std::future::Future<Output = Result<(), JsValue>>,
+{
+    // Subscribe to filter
+    client.subscribe(filter.clone(), None).await
+        .map_err(|e| JsValue::from_str(&format!("Failed to subscribe: {}", e)))?;
+
+    let mut notifications = client.notifications();
+
+    // Track which relays have sent EOSE
+    let mut eose_relays: HashSet<String> = HashSet::new();
+    let mut historical_events: Vec<Box<nostr::Event>> = Vec::new();
+    let mut processed_historical = false;
+
+    while let Ok(notification) = notifications.recv().await {
+        match notification {
+            RelayPoolNotification::Event { event, .. } => {
+                if !processed_historical {
+                    // Still collecting historical events
+                    historical_events.push(event);
+                } else {
+                    // Real-time event - process immediately
+                    event_handler(event).await?;
+                }
+            }
+            RelayPoolNotification::Message { relay_url, message } => {
+                // Check for EOSE message using Debug format (EOSE is RelayMessage::EndOfStoredEvents)
+                let msg_str = format!("{:?}", message);
+                if msg_str.contains("EndOfStoredEvents") {
+                    eose_relays.insert(relay_url.to_string());
+                    log(&format!("  EOSE from {} ({} total)", relay_url, eose_relays.len()));
+
+                    // Once we have EOSE from first relay, process historical events
+                    if !processed_historical && eose_relays.len() >= 1 {
+                        log(&format!("  Sorting {} historical events by created_at...", historical_events.len()));
+
+                        // Sort by created_at (oldest first)
+                        historical_events.sort_by_key(|e| e.created_at);
+
+                        // Process sorted historical events
+                        for event in historical_events.drain(..) {
+                            event_handler(event).await?;
+                        }
+
+                        processed_historical = true;
+                        log("  ✓ Historical events processed, switching to real-time mode");
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    Ok(())
 }
 
 /// Initialize the library (call this first from JavaScript)
@@ -1904,7 +1970,7 @@ pub fn subscribe_to_welcome_messages(callback: js_sys::Function) -> js_sys::Prom
             let keys = get_keys()?;
             let pubkey = keys.public_key();
 
-            let client = create_connected_client().await?;
+            let client = Arc::new(create_connected_client().await?);
 
             // Subscribe to Welcomes (Kind 444) with #p tag filtering (addressed to us)
             // No 'since' filter - get all historical Welcomes addressed to us
@@ -1912,19 +1978,17 @@ pub fn subscribe_to_welcome_messages(callback: js_sys::Function) -> js_sys::Prom
                 .kind(Kind::Custom(444))
                 .pubkey(pubkey); // Filter by #p tag (addressed to us)
 
-            client.subscribe(filter, None).await
-                .map_err(|e| JsValue::from_str(&format!("Failed to subscribe: {}", e)))?;
+            log(&format!("✓ Subscribing to Welcome messages for pubkey: {}", pubkey.to_hex()[..16].to_string()));
 
-            log(&format!("✓ Subscribed to Welcome messages for pubkey: {}", pubkey.to_hex()[..16].to_string()));
-
-            // Spawn background task to listen for notifications
+            // Spawn background task to listen for notifications with ordered history
+            let client_clone = client.clone();
             wasm_bindgen_futures::spawn_local(async move {
-                log("📻 Welcome listener started");
-                let mut notifications = client.notifications();
+                log("📻 Welcome listener started with ordered history");
 
-                while let Ok(notification) = notifications.recv().await {
-                    if let RelayPoolNotification::Event { relay_url, event: welcome_event, .. } = notification {
-                        log(&format!("📩 Received Welcome event: {} from {}", welcome_event.id.to_hex(), relay_url));
+                let result = subscribe_with_ordered_history(&client_clone, filter, move |welcome_event| {
+                    let callback_clone = callback.clone();
+                    async move {
+                        log(&format!("📩 Processing Welcome event: {}", welcome_event.id.to_hex()));
 
                         // Extract KeyPackage reference from #e tags
                         let kp_ref: Option<String> = welcome_event.tags.iter()
@@ -1939,7 +2003,7 @@ pub fn subscribe_to_welcome_messages(callback: js_sys::Function) -> js_sys::Prom
 
                         if kp_ref.is_none() {
                             log("  No KeyPackage reference found, ignoring");
-                            continue;
+                            return Ok(());
                         }
 
                         let kp_event_id = kp_ref.unwrap();
@@ -1969,7 +2033,7 @@ pub fn subscribe_to_welcome_messages(callback: js_sys::Function) -> js_sys::Prom
                                         use mdk_storage_traits::welcomes::types::WelcomeState;
                                         if welcome.state == WelcomeState::Accepted {
                                             log(&format!("  ℹ️  Welcome already accepted, skipping"));
-                                            continue;
+                                            return Ok(());
                                         }
 
                                         // Accept Welcome (join the group)
@@ -2003,7 +2067,7 @@ pub fn subscribe_to_welcome_messages(callback: js_sys::Function) -> js_sys::Prom
 
                                                 if let Ok(json) = serde_json::to_string(&result) {
                                                     let js_string = JsValue::from_str(&json);
-                                                    let _ = callback.call1(&JsValue::NULL, &js_string);
+                                                    let _ = callback_clone.call1(&JsValue::NULL, &js_string);
                                                 }
                                             }
                                             Err(e) => {
@@ -2024,7 +2088,7 @@ pub fn subscribe_to_welcome_messages(callback: js_sys::Function) -> js_sys::Prom
 
                                                 if let Ok(json) = serde_json::to_string(&result) {
                                                     let js_string = JsValue::from_str(&json);
-                                                    let _ = callback.call1(&JsValue::NULL, &js_string);
+                                                    let _ = callback_clone.call1(&JsValue::NULL, &js_string);
                                                 }
                                             }
                                         }
@@ -2047,7 +2111,7 @@ pub fn subscribe_to_welcome_messages(callback: js_sys::Function) -> js_sys::Prom
 
                                         if let Ok(json) = serde_json::to_string(&result) {
                                             let js_string = JsValue::from_str(&json);
-                                            let _ = callback.call1(&JsValue::NULL, &js_string);
+                                            let _ = callback_clone.call1(&JsValue::NULL, &js_string);
                                         }
                                     }
                                 }
@@ -2056,7 +2120,13 @@ pub fn subscribe_to_welcome_messages(callback: js_sys::Function) -> js_sys::Prom
                                 log(&format!("❌ Failed to create MDK: {:?}", e));
                             }
                         }
+
+                        Ok(())
                     }
+                }).await;
+
+                if let Err(e) = result {
+                    log(&format!("❌ Welcome subscription error: {:?}", e));
                 }
             });
 
