@@ -1970,9 +1970,10 @@
                     document.getElementById('groups-status').innerHTML = '<div class="success">✓ Ready (0 groups)</div>';
                 } else {
                     // Sort by most recent activity (last_message_at), most recent first
+                    // Groups with no last_message_at (newly created/joined) treated as Infinity (appear at top)
                     groups.sort((a, b) => {
-                        const aTime = a.last_message_at || 0;
-                        const bTime = b.last_message_at || 0;
+                        const aTime = a.last_message_at || Infinity;
+                        const bTime = b.last_message_at || Infinity;
                         return bTime - aTime; // Descending order (newest first)
                     });
 
