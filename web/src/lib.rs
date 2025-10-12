@@ -1016,7 +1016,6 @@ pub fn send_ecash(amount: u64) -> js_sys::Promise {
 pub fn send_ecash_p2pk(amount: u64, recipient_npub: String) -> js_sys::Promise {
     future_to_promise(async move {
         let result = async {
-            use cdk::wallet::SendOptions;
             use cdk::nuts::SpendingConditions;
 
             log(&format!("Creating P2PK token for {} sats to {}", amount, &recipient_npub[..16]));
@@ -1030,8 +1029,7 @@ pub fn send_ecash_p2pk(amount: u64, recipient_npub: String) -> js_sys::Promise {
             let pubkey_bytes = recipient_pubkey.to_bytes();
 
             // Create secp256k1 XOnlyPublicKey from the 32-byte Nostr pubkey
-            use nostr::secp256k1::{XOnlyPublicKey, Secp256k1};
-            let secp = Secp256k1::new();
+            use nostr::secp256k1::XOnlyPublicKey;
             let x_only = XOnlyPublicKey::from_slice(&pubkey_bytes)
                 .map_err(|e| JsValue::from_str(&format!("Failed to parse x-only pubkey: {}", e)))?;
 
@@ -2527,9 +2525,6 @@ pub fn add_member_and_publish(group_id_hex: String, keypackage_event_id: String,
             }
 
             let keypackage_event = events.into_iter().next().unwrap();
-
-            // Get our keys
-            let keys = get_keys()?;
 
             // Create MDK
             let mdk = create_mdk().await?;
