@@ -341,4 +341,19 @@ impl WalletDatabase for HybridWalletDatabase {
         self.save_snapshot().await.map_err(to_db_error)?;
         Ok(())
     }
+
+    async fn get_balance(
+        &self,
+        mint_url: Option<MintUrl>,
+        unit: Option<CurrencyUnit>,
+        states: Option<Vec<State>>,
+    ) -> Result<u64, Self::Err> {
+        // Get all proofs matching the filters
+        let proofs = self.get_proofs(mint_url, unit, states, None).await?;
+
+        // Sum up the amounts (convert Amount to u64)
+        let balance: u64 = proofs.iter().map(|p| u64::from(p.proof.amount)).sum();
+
+        Ok(balance)
+    }
 }
