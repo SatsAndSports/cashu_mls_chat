@@ -1390,7 +1390,8 @@
 
         // Notification functions
         let notificationsEnabled = false;
-        let PUSH_SERVER_URL = localStorage.getItem('push_server_url') || '';
+        const DEFAULT_PUSH_SERVER = 'https://mls-push.satsandsports.cash';
+        let PUSH_SERVER_URL = localStorage.getItem('push_server_url') || DEFAULT_PUSH_SERVER;
 
         async function initializeNotifications() {
             // Check if notifications are already enabled in localStorage
@@ -1566,8 +1567,8 @@
 
         // Settings functions
         function loadSettings() {
-            // Load push server URL
-            const pushServerUrl = localStorage.getItem('push_server_url') || '';
+            // Load push server URL (with default)
+            const pushServerUrl = localStorage.getItem('push_server_url') || DEFAULT_PUSH_SERVER;
             document.getElementById('push-server-url').value = pushServerUrl;
         }
 
