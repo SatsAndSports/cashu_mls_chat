@@ -1,5 +1,5 @@
 // Service Worker for MDK Ecash PWA
-const CACHE_NAME = 'mdk-ecash-v1';
+const CACHE_NAME = 'mdk-ecash-v2';
 const urlsToCache = [
   '/',
   '/index.html',
@@ -30,6 +30,35 @@ self.addEventListener('message', event => {
   if (event.data && event.data.type === 'SKIP_WAITING') {
     self.skipWaiting();
   }
+});
+
+// Handle push events
+self.addEventListener('push', event => {
+  console.log('[Service Worker] Push received');
+
+  let data = {};
+  if (event.data) {
+    try {
+      data = event.data.json();
+    } catch (err) {
+      console.error('[Service Worker] Failed to parse push data:', err);
+      data = { title: 'New notification', body: event.data.text() };
+    }
+  }
+
+  const title = data.title || 'MDK Ecash';
+  const options = {
+    body: data.body || 'You have a new notification',
+    icon: data.icon || '/icon-192.png',
+    badge: '/icon-192.png',
+    tag: data.tag || 'mdk-notification',
+    data: data.data || {},
+    requireInteraction: false
+  };
+
+  event.waitUntil(
+    self.registration.showNotification(title, options)
+  );
 });
 
 // Handle notification clicks

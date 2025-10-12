@@ -508,6 +508,22 @@
             <div id="settings-section" class="section">
                 <h2>⚙️ Settings</h2>
 
+                <h3 style="margin-top: 20px;">Push Server (Optional)</h3>
+                <p>Configure a push server for background notifications when the app is closed.</p>
+
+                <div style="margin: 15px 0;">
+                    <label style="display: block; margin-bottom: 5px; font-weight: bold;">Push Server URL:</label>
+                    <input type="text" id="push-server-url" placeholder="https://push.example.com"
+                           style="width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 4px; font-family: monospace;">
+                    <div style="margin-top: 8px;">
+                        <button onclick="savePushServerUrl()">💾 Save</button>
+                        <span id="push-server-status" style="margin-left: 10px; font-size: 0.9em; color: #666;"></span>
+                    </div>
+                    <div style="font-size: 0.85em; color: #666; margin-top: 8px;">
+                        Leave empty for in-app notifications only. See <code>push-server/README.md</code> for setup instructions.
+                    </div>
+                </div>
+
                 <h3 style="margin-top: 20px;">Notifications</h3>
                 <p>Get notified when new messages arrive or when you're added to groups.</p>
 
@@ -1275,6 +1291,8 @@
             } else if (sectionName === 'wallet') {
                 refreshMintBalances();
                 refreshTransactionHistory();
+            } else if (sectionName === 'settings') {
+                loadSettings();
             }
 
             // Update URL hash (unless we're restoring from hash)
@@ -1372,6 +1390,7 @@
 
         // Notification functions
         let notificationsEnabled = false;
+        let PUSH_SERVER_URL = localStorage.getItem('push_server_url') || '';
 
         async function initializeNotifications() {
             // Check if notifications are already enabled in localStorage
@@ -1381,11 +1400,88 @@
             if (enabled && 'Notification' in window && Notification.permission === 'granted') {
                 notificationsEnabled = true;
                 toggle.checked = true;
-                updateNotificationStatus('✅ Notifications enabled');
+
+                // Try to subscribe to push server
+                if (PUSH_SERVER_URL) {
+                    try {
+                        await subscribeToPushServer();
+                        updateNotificationStatus('✅ Notifications enabled (background push active)');
+                    } catch (err) {
+                        console.error('Failed to subscribe to push server:', err);
+                        updateNotificationStatus('✅ Notifications enabled (app must be open)');
+                    }
+                } else {
+                    updateNotificationStatus('✅ Notifications enabled (app must be open)');
+                }
+
                 document.getElementById('notification-test-section').style.display = 'block';
             } else {
                 updateNotificationStatus('Notifications are disabled');
             }
+        }
+
+        async function subscribeToPushServer() {
+            if (!PUSH_SERVER_URL) {
+                console.log('No push server configured');
+                return;
+            }
+
+            try {
+                // Get VAPID public key from server
+                const response = await fetch(`${PUSH_SERVER_URL}/vapid-public-key`);
+                const { publicKey } = await response.json();
+
+                // Subscribe to push
+                const registration = await navigator.serviceWorker.ready;
+                const subscription = await registration.pushManager.subscribe({
+                    userVisibleOnly: true,
+                    applicationServerKey: urlBase64ToUint8Array(publicKey)
+                });
+
+                // Get user's groups
+                const groupsJson = await get_groups();
+                const groups = JSON.parse(groupsJson);
+                const groupIds = groups.map(g => g.nostr_group_id || g.id);
+
+                // Get user's relays
+                const relaysJson = await get_relays();
+                const relays = JSON.parse(relaysJson);
+
+                // Get user pubkey
+                const pubkey = await get_pubkey_hex();
+
+                // Send subscription to server
+                await fetch(`${PUSH_SERVER_URL}/subscribe`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        pubkey: pubkey,
+                        subscription: subscription,
+                        groupIds: groupIds,
+                        relays: relays
+                    })
+                });
+
+                console.log('✅ Subscribed to push server');
+            } catch (err) {
+                console.error('Failed to subscribe to push server:', err);
+                throw err;
+            }
+        }
+
+        function urlBase64ToUint8Array(base64String) {
+            const padding = '='.repeat((4 - base64String.length % 4) % 4);
+            const base64 = (base64String + padding)
+                .replace(/\-/g, '+')
+                .replace(/_/g, '/');
+
+            const rawData = window.atob(base64);
+            const outputArray = new Uint8Array(rawData.length);
+
+            for (let i = 0; i < rawData.length; ++i) {
+                outputArray[i] = rawData.charCodeAt(i);
+            }
+            return outputArray;
         }
 
         window.toggleNotifications = async function() {
@@ -1405,7 +1501,20 @@
                 if (permission === 'granted') {
                     notificationsEnabled = true;
                     localStorage.setItem('notifications_enabled', 'true');
-                    updateNotificationStatus('✅ Notifications enabled');
+
+                    // Try to subscribe to push server
+                    if (PUSH_SERVER_URL) {
+                        try {
+                            await subscribeToPushServer();
+                            updateNotificationStatus('✅ Notifications enabled (background push active)');
+                        } catch (err) {
+                            console.error('Failed to subscribe to push server:', err);
+                            updateNotificationStatus('✅ Notifications enabled (app must be open)');
+                        }
+                    } else {
+                        updateNotificationStatus('✅ Notifications enabled (app must be open)');
+                    }
+
                     document.getElementById('notification-test-section').style.display = 'block';
 
                     // Show welcome notification
@@ -1425,6 +1534,21 @@
                 localStorage.setItem('notifications_enabled', 'false');
                 updateNotificationStatus('Notifications disabled');
                 document.getElementById('notification-test-section').style.display = 'none';
+
+                // Unsubscribe from push server
+                if (PUSH_SERVER_URL) {
+                    try {
+                        const pubkey = await get_pubkey_hex();
+                        await fetch(`${PUSH_SERVER_URL}/unsubscribe`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ pubkey })
+                        });
+                        console.log('✅ Unsubscribed from push server');
+                    } catch (err) {
+                        console.error('Failed to unsubscribe from push server:', err);
+                    }
+                }
             }
         };
 
@@ -1438,6 +1562,55 @@
                 body: 'This is a test notification from MDK Ecash',
                 icon: '/icon-192.png'
             });
+        };
+
+        // Settings functions
+        function loadSettings() {
+            // Load push server URL
+            const pushServerUrl = localStorage.getItem('push_server_url') || '';
+            document.getElementById('push-server-url').value = pushServerUrl;
+        }
+
+        window.savePushServerUrl = async function() {
+            const input = document.getElementById('push-server-url');
+            const url = input.value.trim();
+            const statusSpan = document.getElementById('push-server-status');
+
+            // Validate URL if provided
+            if (url && !url.startsWith('http://') && !url.startsWith('https://')) {
+                statusSpan.textContent = '❌ URL must start with http:// or https://';
+                statusSpan.style.color = '#d32f2f';
+                return;
+            }
+
+            // Save to localStorage
+            localStorage.setItem('push_server_url', url);
+
+            // Update global variable
+            PUSH_SERVER_URL = url;
+
+            if (url) {
+                statusSpan.textContent = '✅ Saved';
+                statusSpan.style.color = '#4caf50';
+
+                // If notifications are enabled, resubscribe
+                if (notificationsEnabled) {
+                    try {
+                        await subscribeToPushServer();
+                        statusSpan.textContent = '✅ Saved and subscribed';
+                    } catch (err) {
+                        statusSpan.textContent = '⚠️ Saved but subscription failed';
+                        console.error('Failed to subscribe:', err);
+                    }
+                }
+            } else {
+                statusSpan.textContent = '✅ Saved (push disabled)';
+                statusSpan.style.color = '#666';
+            }
+
+            setTimeout(() => {
+                statusSpan.textContent = '';
+            }, 3000);
         };
 
         function showNotification(title, options) {

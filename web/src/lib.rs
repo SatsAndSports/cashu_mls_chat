@@ -1364,6 +1364,7 @@ pub fn get_groups() -> js_sys::Promise {
 
                 serde_json::json!({
                     "id": hex::encode(g.mls_group_id.as_slice()),
+                    "nostr_group_id": hex::encode(g.nostr_group_id),
                     "name": g.name,
                     "description": g.description,
                     "image_hash": g.image_hash.map(|h| hex::encode(h)),
@@ -1908,10 +1909,10 @@ pub fn subscribe_to_welcome_messages(callback: js_sys::Function) -> js_sys::Prom
             let client = create_connected_client().await?;
 
             // Subscribe to Welcomes (Kind 444) with #p tag filtering (addressed to us)
+            // No 'since' filter - get all historical Welcomes addressed to us
             let filter = nostr::Filter::new()
                 .kind(Kind::Custom(444))
-                .pubkey(pubkey) // Filter by #p tag (addressed to us)
-                .since(nostr::Timestamp::now()); // Only new Welcomes from now
+                .pubkey(pubkey); // Filter by #p tag (addressed to us)
 
             client.subscribe(filter, None).await
                 .map_err(|e| JsValue::from_str(&format!("Failed to subscribe: {}", e)))?;
@@ -1966,41 +1967,18 @@ pub fn subscribe_to_welcome_messages(callback: js_sys::Function) -> js_sys::Prom
                                         let group_name = welcome.group_name.clone();
                                         log(&format!("  ✓ Processed Welcome! Group: {}", group_name));
 
+                                        // Check if already accepted (de-duplicate)
+                                        use mdk_storage_traits::welcomes::types::WelcomeState;
+                                        if welcome.state == WelcomeState::Accepted {
+                                            log(&format!("  ℹ️  Welcome already accepted, skipping"));
+                                            continue;
+                                        }
+
                                         // Accept Welcome (join the group)
                                         log("  Accepting Welcome (joining group)...");
                                         match mdk.accept_welcome(&welcome) {
                                             Ok(_) => {
                                                 log(&format!("✅ Successfully joined group: {}", group_name));
-
-                                                // Send "[joined group]" message
-                                                let join_message = "[joined group]";
-
-                                                log(&format!("  Sending join message: {}", join_message));
-                                                if let Ok(keys) = get_keys() {
-                                                    let rumor = nostr::UnsignedEvent {
-                                                        id: None,
-                                                        pubkey: keys.public_key(),
-                                                        created_at: nostr::Timestamp::now(),
-                                                        kind: Kind::GiftWrap,
-                                                        tags: nostr::Tags::new(),
-                                                        content: join_message.to_string(),
-                                                    };
-
-                                                    match mdk.create_message(&welcome.mls_group_id, rumor) {
-                                                        Ok(message_event) => {
-                                                            if let Err(e) = mdk.merge_pending_commit(&welcome.mls_group_id) {
-                                                                log(&format!("  ⚠️ Failed to merge join message commit: {}", e));
-                                                            } else if let Ok(client) = create_connected_client().await {
-                                                                match client.send_event(&message_event).await {
-                                                                    Ok(_) => log("  ✓ Join message sent"),
-                                                                    Err(e) => log(&format!("  ⚠️ Failed to send join message: {}", e)),
-                                                                }
-                                                                let _ = client.disconnect().await;
-                                                            }
-                                                        }
-                                                        Err(e) => log(&format!("  ⚠️ Failed to create join message: {}", e)),
-                                                    }
-                                                }
 
                                                 // Explicitly save after accepting Welcome
                                                 if let Ok(storage) = get_or_create_storage().await {
