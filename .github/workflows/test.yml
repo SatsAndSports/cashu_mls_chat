@@ -37,6 +37,9 @@ jobs:
     - name: Install wasm-pack
       run: cargo install wasm-pack
 
+    - name: Install nostr-rs-relay
+      run: cargo install nostr-rs-relay
+
     - name: Build WASM
       run: |
         cd web
