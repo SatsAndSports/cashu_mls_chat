@@ -30,9 +30,18 @@ Built around the hack days ([1](https://ecashhackday.github.io/) [2](https://c03
 
 - Rust 1.90.0 or later (specified in `rust-toolchain.toml`)
 - wasm-pack: `cargo install wasm-pack`
-- Local clones of:
-  - [MDK](https://github.com/parres-hq/mdk) in `./mdk/`
-  - [CDK](https://github.com/cashubtc/cdk) in `./cdk/`
+
+## Cloning
+
+This project uses git submodules for [MDK](https://github.com/parres-hq/mdk) and [CDK](https://github.com/cashubtc/cdk) dependencies.
+
+```bash
+# Clone with submodules
+git clone --recurse-submodules https://github.com/aaronmcdaid/mdk_group_chat_with_cashu_wallet_integration.git
+
+# Or if already cloned, initialize submodules
+git submodule update --init --recursive
+```
 
 ## Building
 

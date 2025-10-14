@@ -1,0 +1,6 @@
+[submodule "cdk"]
+	path = cdk
+	url = https://github.com/cashubtc/cdk.git
+[submodule "mdk"]
+	path = mdk
+	url = https://github.com/parres-hq/mdk.git
