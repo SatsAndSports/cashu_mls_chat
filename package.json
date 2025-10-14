@@ -1,0 +1,28 @@
+{
+  "name": "mdk_ecash",
+  "version": "1.0.0",
+  "description": "A web-based application combining **MDK (Marmot Development Kit)** for encrypted group messaging with **Cashu (CDK)** for ecash wallet functionality.",
+  "main": "index.js",
+  "scripts": {
+    "test": "playwright test",
+    "test:ui": "playwright test --ui",
+    "test:debug": "playwright test --debug",
+    "test:report": "playwright show-report"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aaronmcdaid/mdk_group_chat_with_cashu_wallet_integration.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/aaronmcdaid/mdk_group_chat_with_cashu_wallet_integration/issues"
+  },
+  "homepage": "https://github.com/aaronmcdaid/mdk_group_chat_with_cashu_wallet_integration#readme",
+  "devDependencies": {
+    "@playwright/test": "^1.56.0",
+    "@types/node": "^24.7.2",
+    "typescript": "^5.9.3"
+  }
+}

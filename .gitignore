@@ -1,0 +1,42 @@
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Playwright
+playwright-report/
+test-results/
+.playwright/
+
+# Rust / Cargo
+target/
+**/*.rs.bk
+Cargo.lock
+
+# Wallet data (sensitive)
+wallets/
+
+# Nostr relay data
+nostr-relay-data/
+
+# Keys (sensitive)
+keys/
+
+# Build artifacts
+web/pkg/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Local development
+.env
+.env.local

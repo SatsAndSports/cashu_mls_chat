@@ -146,6 +146,100 @@ All group operations generate visible messages:
 5. Use "📤 Send e-cash" to create a cashu token and share it
 6. Friend uses "📥 Receive e-cash" to claim the token
 
+## Testing
+
+### Prerequisites
+
+- Node.js 16+ and npm
+- Playwright (automatically installed via npm)
+- Chromium browser (automatically installed via Playwright)
+- (Optional) Local Nostr relay: `cargo install nostr-rs-relay`
+
+### Setup
+
+Install test dependencies:
+
+```bash
+npm install
+npx playwright install chromium
+```
+
+### Running Tests
+
+**Run all tests:**
+```bash
+npx playwright test
+```
+
+**Run tests with UI:**
+```bash
+npx playwright test --ui
+```
+
+**Run specific test file:**
+```bash
+npx playwright test tests/e2e/smoke.test.ts
+```
+
+**Show test report:**
+```bash
+npx playwright show-report
+```
+
+### Test Structure
+
+```
+tests/
+├── e2e/              # End-to-end tests
+│   └── smoke.test.ts # Basic smoke tests
+└── helpers/          # Test utilities
+    └── relay.ts      # Local relay management
+```
+
+### Writing Tests
+
+E2E tests use Playwright and TypeScript. Example:
+
+```typescript
+import { test, expect } from '@playwright/test';
+
+test('user can create group', async ({ page }) => {
+  await page.goto('/');
+  await page.click('text=Groups');
+  await page.click('button:has-text("Create Group")');
+  // ... test logic
+});
+```
+
+### Local Relay for Testing
+
+Many tests require a local Nostr relay. Install and use:
+
+```bash
+# Install relay
+cargo install nostr-rs-relay
+
+# Relay helper starts automatically in tests
+# Or run manually for development:
+nostr-rs-relay --port 8080
+```
+
+### Test Configuration
+
+See `playwright.config.ts` for configuration:
+- Test timeout: 30 seconds
+- Base URL: http://localhost:4450
+- Auto-starts web server before tests
+- Screenshots on failure
+- HTML test report
+
+### Continuous Integration
+
+Tests run on CI with:
+- Retries: 2 attempts on failure
+- Workers: 1 (sequential execution)
+- Reporter: HTML
+
 ## License
 
 See individual licenses for MDK and CDK dependencies.
