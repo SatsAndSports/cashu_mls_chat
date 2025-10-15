@@ -4,6 +4,7 @@ import { exec } from 'child_process';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
+import * as net from 'net';
 
 const execAsync = promisify(exec);
 
@@ -121,4 +122,111 @@ max_event_bytes = 2097152
 
     console.log(`✅ Relay stopped and cleaned up`);
   };
+}
+
+/**
+ * Check if a port is in use
+ */
+async function isPortInUse(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const server = net.createServer();
+
+    server.once('error', (err: NodeJS.ErrnoException) => {
+      if (err.code === 'EADDRINUSE') {
+        resolve(true);
+      } else {
+        resolve(false);
+      }
+    });
+
+    server.once('listening', () => {
+      server.close();
+      resolve(false);
+    });
+
+    server.listen(port, '127.0.0.1');
+  });
+}
+
+/**
+ * Ensure a Nostr relay is running on the specified port
+ * If already running, does nothing
+ * If not running, starts one in the background
+ *
+ * The relay is NOT cleaned up - it stays running for future test runs
+ */
+export async function ensureRelayRunning(port: number = 8080): Promise<void> {
+  // Check if relay is already running
+  const inUse = await isPortInUse(port);
+
+  if (inUse) {
+    console.log(`✅ Relay already running on port ${port}`);
+    return;
+  }
+
+  console.log(`🚀 Starting Nostr relay on port ${port}...`);
+
+  // Check if nostr-rs-relay is installed
+  try {
+    await execAsync('which nostr-rs-relay');
+  } catch (err) {
+    throw new Error(
+      'nostr-rs-relay not found. Install it with: cargo install nostr-rs-relay'
+    );
+  }
+
+  // Create persistent config directory (not in /tmp)
+  const homeDir = os.homedir();
+  const configDir = path.join(homeDir, '.nostr-relay-test');
+
+  try {
+    await fs.mkdir(configDir, { recursive: true });
+  } catch (err) {
+    // Directory might already exist
+  }
+
+  const configPath = path.join(configDir, 'config.toml');
+
+  const config = `
+[info]
+relay_url = "ws://localhost:${port}"
+name = "Test Relay"
+description = "Nostr relay for testing (persistent)"
+
+[network]
+port = ${port}
+address = "127.0.0.1"
+
+[database]
+data_directory = "${configDir}"
+
+[limits]
+max_event_bytes = 2097152
+`;
+
+  await fs.writeFile(configPath, config);
+
+  // Start the relay process in background (detached)
+  const relayProcess: ChildProcess = spawn(
+    'nostr-rs-relay',
+    ['--config', configPath],
+    {
+      detached: true,
+      stdio: 'ignore'
+    }
+  );
+
+  // Unref so it doesn't keep the test process alive
+  relayProcess.unref();
+
+  // Wait a moment for relay to start
+  await new Promise((resolve) => setTimeout(resolve, 2000));
+
+  // Verify it started
+  const isRunning = await isPortInUse(port);
+  if (!isRunning) {
+    throw new Error(`Failed to start relay on port ${port}`);
+  }
+
+  console.log(`✅ Relay started on ws://localhost:${port} (will stay running)`);
 }

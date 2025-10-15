@@ -1,31 +1,28 @@
 import { test, expect } from '@playwright/test';
-import { startRelay } from '../helpers/relay';
 import { TestUser } from '../helpers/user';
 
 /**
  * Group Chat E2E Tests
  *
  * Tests the core functionality: encrypted group messaging between two users
+ *
+ * Note: Relay is managed globally (see tests/global-setup.ts)
+ * It runs on ws://localhost:8080 and stays running across test runs
  */
 test.describe('Group Chat', () => {
-  let cleanupRelay: () => Promise<void>;
-
-  // Start relay before all tests in this suite
-  test.beforeAll(async () => {
-    cleanupRelay = await startRelay(8080);
-  });
-
-  // Stop relay after all tests
-  test.afterAll(async () => {
-    if (cleanupRelay) {
-      await cleanupRelay();
-    }
-  });
-
   test('two users can exchange messages', async ({ browser }) => {
     // Create two isolated browser contexts (like two different users)
     const aliceContext = await browser.newContext();
     const bobContext = await browser.newContext();
+
+    // Set OVERRIDE_DEFAULT_RELAYS for both contexts
+    // This ensures KeyPackages and messages use the test relay
+    await aliceContext.addInitScript(() => {
+      (window as any).OVERRIDE_DEFAULT_RELAYS = ['ws://localhost:8080'];
+    });
+    await bobContext.addInitScript(() => {
+      (window as any).OVERRIDE_DEFAULT_RELAYS = ['ws://localhost:8080'];
+    });
 
     const alicePage = await aliceContext.newPage();
     const bobPage = await bobContext.newPage();
@@ -44,10 +41,6 @@ test.describe('Group Chat', () => {
       // Get Bob's npub (Alice will need it to invite him)
       const bobNpub = await bob.getNpub();
 
-      // Both users add the local test relay
-      await alice.addRelay('ws://localhost:8080');
-      await bob.addRelay('ws://localhost:8080');
-
       console.log('\n=== KeyPackage Creation ===');
 
       // Bob creates a KeyPackage (needed for Alice to invite him)
@@ -62,12 +55,18 @@ test.describe('Group Chat', () => {
 
       // Bob should automatically receive the Welcome message and join
       await bob.waitForGroup('Test Group', 20000);
+      console.log('✅ Bob received Welcome and group appeared');
 
       console.log('\n=== Opening Chats ===');
 
       // Both users open the chat
+      console.log('Alice opening chat...');
       await alice.openChat('Test Group');
+      console.log('✅ Alice chat opened');
+
+      console.log('Bob opening chat...');
       await bob.openChat('Test Group');
+      console.log('✅ Bob chat opened');
 
       console.log('\n=== Message Exchange ===');
 

@@ -56,20 +56,26 @@ export class TestUser {
     // The button text is "+ Create KeyPackage"
     await this.page.click('button:has-text("Create KeyPackage")');
 
-    // Wait for KeyPackage modal to appear and show success
+    // Wait for modal to show successful publication
     try {
-      await this.page.waitForSelector('text=KeyPackage Created Successfully', { timeout: 10000 });
-      console.log(`[${this.name}] KeyPackage creation modal appeared`);
+      await this.page.waitForSelector('text=Published to 1/1 relays', { timeout: 10000 });
+      console.log(`[${this.name}] KeyPackage published successfully`);
 
-      // Close the modal
-      await this.page.click('button:has-text("Close")');
+      // Wait for Close button container to be visible
+      await this.page.waitForSelector('#kp-close-button-container', { state: 'visible', timeout: 5000 });
+
+      // Close the modal by clicking the specific button inside the KeyPackage modal
+      await this.page.click('#kp-close-button-container button');
+      console.log(`[${this.name}] Clicked Close button`);
+
+      // Wait for modal to actually disappear
+      await this.page.waitForSelector('#creating-keypackage-modal', { state: 'hidden', timeout: 5000 });
+      console.log(`[${this.name}] Modal closed`);
     } catch (err) {
-      console.error(`[${this.name}] KeyPackage creation may have failed or modal didn't appear`);
+      console.error(`[${this.name}] KeyPackage creation may have failed`);
       await this.screenshot('keypackage-error');
+      throw err;
     }
-
-    // Wait for KeyPackage to be published to relay
-    await this.page.waitForTimeout(2000);
 
     console.log(`[${this.name}] KeyPackage created and published`);
   }
@@ -83,31 +89,30 @@ export class TestUser {
     // Navigate to Groups
     await this.page.click('.nav-item:has-text("Groups")');
 
-    // Click Create Group
-    await this.page.click('button:has-text("Create Group")');
+    // Click Create New Group
+    await this.page.click('button:has-text("Create New Group")');
 
     // Fill in group details
-    await this.page.fill('#group-name-input', groupName);
-    await this.page.fill('#group-description-input', 'Test group description');
+    await this.page.fill('#create-group-name', groupName);
+    await this.page.fill('#create-group-description', 'Test group description');
 
     // Fill in first member npub
-    await this.page.fill('#first-member-npub', inviteNpub);
+    await this.page.fill('#create-group-first-member', inviteNpub);
 
-    // Click to proceed with invitation
-    await this.page.click('button:has-text("Next: Select KeyPackage")');
+    // Click Create Group button (creates the group and sends invite)
+    await this.page.click('button:has-text("Create Group")');
 
-    // Wait for KeyPackage list to load
-    await this.page.waitForTimeout(2000);
+    // Wait for success message in the invite-details-modal
+    await this.page.waitForSelector('text=Group Created Successfully', { timeout: 15000 });
+    console.log(`[${this.name}] Group creation succeeded`);
 
-    // Select first available KeyPackage (radio button)
-    const firstKeyPackageRadio = this.page.locator('input[name="keypackage-select"]').first();
-    await firstKeyPackageRadio.click();
+    // Wait for Close button to appear in invite-details-modal
+    await this.page.waitForSelector('#invite-close-button-container', { state: 'visible', timeout: 5000 });
 
-    // Create the group
-    await this.page.click('button:has-text("Create Group & Send Invite")');
-
-    // Wait for group creation to complete
-    await this.page.waitForTimeout(5000);
+    // Close the invite-details-modal
+    await this.page.click('#invite-close-button-container button');
+    await this.page.waitForSelector('#invite-details-modal', { state: 'hidden', timeout: 5000 });
+    console.log(`[${this.name}] Modal closed`);
 
     console.log(`[${this.name}] Group created: ${groupName}`);
   }
@@ -136,13 +141,44 @@ export class TestUser {
     // Navigate to Groups if not already there
     await this.page.click('.nav-item:has-text("Groups")');
 
-    // Click on the group to open chat
-    await this.page.click(`text="${groupName}"`);
+    // Wait for groups list to load
+    await this.page.waitForSelector('#groups-list', { timeout: 5000 });
+
+    // Wait for the specific group to be visible
+    try {
+      await this.page.waitForSelector(`.group-item:has-text("${groupName}")`, { timeout: 5000 });
+    } catch (err) {
+      // Debug: screenshot and list what groups are visible
+      const groupTexts = await this.page.locator('.group-item').allTextContents();
+      console.error(`[${this.name}] Group "${groupName}" not found. Available groups:`, groupTexts);
+      await this.screenshot('group-not-found');
+      throw err;
+    }
+
+    // Click on the specific group item
+    console.log(`[${this.name}] Clicking group item...`);
+    await this.page.click(`.group-item:has-text("${groupName}")`);
+
+    // Check the current URL/hash
+    const url = this.page.url();
+    console.log(`[${this.name}] URL after click: ${url}`);
 
     // Wait for chat to open
-    await this.page.waitForSelector('#message-input', { timeout: 5000 });
-
-    console.log(`[${this.name}] Chat opened: ${groupName}`);
+    try {
+      await this.page.waitForSelector('#chat-input', { timeout: 5000 });
+      console.log(`[${this.name}] Chat opened: ${groupName}`);
+    } catch (err) {
+      // Debug: check what section is visible
+      const sections = ['#identity-section', '#groups-section', '#wallet-section', '#chat-section'];
+      for (const section of sections) {
+        const isVisible = await this.page.locator(section).isVisible();
+        if (isVisible) {
+          console.log(`[${this.name}] Currently visible section: ${section}`);
+        }
+      }
+      await this.screenshot('chat-not-opening');
+      throw err;
+    }
   }
 
   /**
@@ -152,15 +188,12 @@ export class TestUser {
     console.log(`[${this.name}] Sending message: "${text}"`);
 
     // Fill message input
-    await this.page.fill('#message-input', text);
+    await this.page.fill('#chat-input', text);
 
     // Click send button
-    await this.page.click('button:has-text("Send")');
+    await this.page.click('#send-button');
 
-    // Wait for message to be sent
-    await this.page.waitForTimeout(1000);
-
-    console.log(`[${this.name}] Message sent`);
+    console.log(`[${this.name}] Message sent (clicked send button)`);
   }
 
   /**

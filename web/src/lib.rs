@@ -642,13 +642,31 @@ const DEFAULT_RELAYS: &[&str] = &[
 fn get_relays_internal() -> Result<Vec<String>, JsValue> {
     let storage = get_local_storage()?;
 
+    // Priority: localStorage > OVERRIDE_DEFAULT_RELAYS > DEFAULT_RELAYS
     match storage.get_item("nostr_relays")? {
         Some(json_str) => {
+            // User has configured relays - use those
             serde_json::from_str::<Vec<String>>(&json_str)
                 .map_err(|e| JsValue::from_str(&format!("Failed to parse relays: {}", e)))
         }
         None => {
-            // Return default relays
+            // No localStorage - check for OVERRIDE_DEFAULT_RELAYS (for testing)
+            let window = web_sys::window().ok_or_else(|| JsValue::from_str("No window object"))?;
+            if let Ok(override_default_relays) = js_sys::Reflect::get(&window, &JsValue::from_str("OVERRIDE_DEFAULT_RELAYS")) {
+                if !override_default_relays.is_undefined() && !override_default_relays.is_null() {
+                    if let Ok(array) = override_default_relays.dyn_into::<js_sys::Array>() {
+                        // Use OVERRIDE_DEFAULT_RELAYS even if empty (empty array is valid!)
+                        let relays: Vec<String> = array
+                            .iter()
+                            .filter_map(|v| v.as_string())
+                            .collect();
+                        log(&format!("🧪 Using OVERRIDE_DEFAULT_RELAYS: {:?}", relays));
+                        return Ok(relays);
+                    }
+                }
+            }
+
+            // No localStorage, no OVERRIDE_DEFAULT_RELAYS - use app defaults
             Ok(DEFAULT_RELAYS.iter().map(|s| s.to_string()).collect())
         }
     }

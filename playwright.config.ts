@@ -7,6 +7,9 @@ import { defineConfig, devices } from '@playwright/test';
 export default defineConfig({
   testDir: './tests/e2e',
 
+  // Global setup - runs once before all tests
+  globalSetup: './tests/global-setup.ts',
+
   // Maximum time one test can run
   timeout: 30000,
 
@@ -49,7 +52,7 @@ export default defineConfig({
   webServer: {
     command: 'cd web && python3 -m http.server 4450',
     port: 4450,
-    reuseExistingServer: true,
+    reuseExistingServer: false, // Always fail if port is already taken
     timeout: 120000,
   },
 });
