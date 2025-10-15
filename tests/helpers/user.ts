@@ -83,7 +83,7 @@ export class TestUser {
   /**
    * Create a new group and invite a member
    */
-  async createGroup(groupName: string, inviteNpub: string) {
+  async createGroup(groupName: string, inviteNpub: string, makeAdmin: boolean = false) {
     console.log(`[${this.name}] Creating group: ${groupName}`);
 
     // Navigate to Groups
@@ -98,6 +98,12 @@ export class TestUser {
 
     // Fill in first member npub
     await this.page.fill('#create-group-first-member', inviteNpub);
+
+    // Set as admin if requested
+    if (makeAdmin) {
+      await this.page.check('#create-group-first-member-admin');
+      console.log(`[${this.name}] Marking first member as admin`);
+    }
 
     // Click Create Group button (creates the group and sends invite)
     await this.page.click('button:has-text("Create Group")');
@@ -130,6 +136,40 @@ export class TestUser {
     await this.page.waitForSelector(`text="${groupName}"`, { timeout });
 
     console.log(`[${this.name}] Group appeared: ${groupName}`);
+  }
+
+  /**
+   * Invite a member to an existing group
+   */
+  async inviteMember(groupName: string, inviteNpub: string) {
+    console.log(`[${this.name}] Inviting member to group: ${groupName}`);
+
+    // First, open the group chat
+    await this.openChat(groupName);
+
+    // Click the Invite Member button at the top of the chat
+    await this.page.click('#invite-member-btn');
+    console.log(`[${this.name}] Clicked Invite Member button`);
+
+    // Fill in member npub in the invite modal
+    await this.page.fill('#invite-member-npub', inviteNpub);
+
+    // Click Send Invite button to send the invitation
+    await this.page.click('button:has-text("Send Invite")');
+
+    // Wait for success message in the invite-details-modal
+    await this.page.waitForSelector('text=Invitation Completed Successfully', { timeout: 15000 });
+    console.log(`[${this.name}] Invitation sent`);
+
+    // Wait for Close button to appear
+    await this.page.waitForSelector('#invite-close-button-container', { state: 'visible', timeout: 5000 });
+
+    // Close the modal
+    await this.page.click('#invite-close-button-container button');
+    await this.page.waitForSelector('#invite-details-modal', { state: 'hidden', timeout: 5000 });
+    console.log(`[${this.name}] Modal closed`);
+
+    console.log(`[${this.name}] Member invited to ${groupName}`);
   }
 
   /**
