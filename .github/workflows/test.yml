@@ -34,14 +34,37 @@ jobs:
       with:
         toolchain: stable
 
+    - name: Cache Cargo binaries
+      uses: actions/cache@v4
+      with:
+        path: ~/.cargo/bin/
+        key: ${{ runner.os }}-cargo-binaries-${{ hashFiles('~/.cargo/bin/wasm-pack', '~/.cargo/bin/nostr-rs-relay') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-binaries-
+
+    - name: Cache Rust dependencies
+      uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: "web -> target"
+
     - name: Install protobuf compiler
       run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
 
     - name: Install wasm-pack
-      run: cargo install wasm-pack
+      run: |
+        if ! command -v wasm-pack &> /dev/null; then
+          cargo install wasm-pack
+        else
+          echo "wasm-pack already installed, skipping"
+        fi
 
     - name: Install nostr-rs-relay
-      run: cargo install nostr-rs-relay
+      run: |
+        if ! command -v nostr-rs-relay &> /dev/null; then
+          cargo install nostr-rs-relay
+        else
+          echo "nostr-rs-relay already installed, skipping"
+        fi
 
     - name: Build WASM
       run: |
