@@ -3577,9 +3577,9 @@
                     if (result) {
                         console.log('QR code scanned:', result.text.substring(0, 20) + '...');
 
-                        // Strip 'lightning:' prefix if present
-                        let invoice = result.text;
-                        if (invoice.toLowerCase().startsWith('lightning:')) {
+                        // Normalize to lowercase first, then strip 'lightning:' prefix if present
+                        let invoice = result.text.trim().toLowerCase();
+                        if (invoice.startsWith('lightning:')) {
                             invoice = invoice.substring(10);
                         }
 
