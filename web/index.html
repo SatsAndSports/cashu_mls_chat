@@ -15,11 +15,9 @@
     <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png">
     <link rel="apple-touch-icon" href="/icon-192.png">
 
-    <!-- QR Code Scanner Library (qr-scanner) -->
-    <script type="module">
-        import QrScanner from 'https://unpkg.com/qr-scanner@1.4.2/qr-scanner.min.js';
-        window.QrScanner = QrScanner;
-    </script>
+    <!-- QR Code Scanner Libraries -->
+    <script src="https://rawgit.com/schmich/instascan-builds/master/instascan.min.js"></script>
+    <script src="https://unpkg.com/@zxing/library@latest/umd/index.min.js"></script>
     <!-- QR Code Generator Library -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
     <style>
@@ -339,9 +337,6 @@
             transform: translateX(22px);
         }
     </style>
-    <!-- Eruda mobile console for debugging -->
-    <script src="https://cdn.jsdelivr.net/npm/eruda"></script>
-    <script>eruda.init();</script>
 </head>
 <body>
     <div id="header">
@@ -3538,15 +3533,15 @@
             }
         };
 
-        // qr-scanner for Lightning invoices
-        let lightningQrScanner = null;
+        // Try ZXing with Instascan's camera selection
+        let lightningZxingReader = null;
+        let selectedCameraId = null;
 
         window.showQRScanner = async function() {
             // If scanner is already running, just show the container
-            if (lightningQrScanner) {
+            if (lightningZxingReader) {
                 console.log('Scanner already active');
                 document.getElementById('qr-scanner-container').style.display = 'block';
-                await lightningQrScanner.start();
                 return;
             }
 
@@ -3562,14 +3557,28 @@
                 videoElement.innerHTML = '';
                 videoElement.appendChild(video);
 
-                // Create qr-scanner instance with better autofocus
-                lightningQrScanner = new QrScanner(
-                    video,
-                    result => {
-                        console.log('QR code scanned:', result.data.substring(0, 20) + '...');
+                // Use Instascan to find the best camera, then use ZXing with that camera
+                const cameras = await Instascan.Camera.getCameras();
+                if (cameras.length === 0) {
+                    throw new Error('No cameras found');
+                }
+
+                // Prefer back camera (usually last in array on mobile)
+                const backCamera = cameras.length > 1 ? cameras[cameras.length - 1] : cameras[0];
+                selectedCameraId = backCamera.id;
+                console.log('Selected camera:', backCamera.name, 'ID:', selectedCameraId);
+
+                // Create ZXing reader
+                const codeReader = new ZXing.BrowserQRCodeReader();
+                lightningZxingReader = codeReader;
+
+                // Start ZXing with the specific camera ID
+                codeReader.decodeFromVideoDevice(selectedCameraId, video, (result, err) => {
+                    if (result) {
+                        console.log('QR code scanned:', result.text.substring(0, 20) + '...');
 
                         // Strip 'lightning:' prefix if present
-                        let invoice = result.data;
+                        let invoice = result.text;
                         if (invoice.toLowerCase().startsWith('lightning:')) {
                             invoice = invoice.substring(10);
                         }
@@ -3577,16 +3586,17 @@
                         document.getElementById('lightning-invoice-input').value = invoice;
                         decodeLightningInvoice();
                         hideQRScanner();
-                    },
-                    {
-                        returnDetailedScanResult: true,
-                        highlightScanRegion: true,
-                        highlightCodeOutline: true,
                     }
-                );
+                });
 
-                // Start scanning
-                await lightningQrScanner.start();
+                // Log camera settings after it starts
+                setTimeout(() => {
+                    const track = video.srcObject?.getVideoTracks()[0];
+                    if (track) {
+                        console.log('ZXing camera settings:', track.getSettings());
+                    }
+                }, 2000);
+
             } catch (err) {
                 console.error('Failed to start QR scanner:', err);
                 alert('Failed to start camera. Please grant camera permissions.');
@@ -3595,10 +3605,10 @@
         };
 
         window.hideQRScanner = function() {
-            // Stop qr-scanner
-            if (lightningQrScanner) {
-                lightningQrScanner.stop();
-                lightningQrScanner = null;
+            // Stop ZXing
+            if (lightningZxingReader) {
+                lightningZxingReader.reset();
+                lightningZxingReader = null;
             }
 
             // Clear video element
@@ -4278,7 +4288,7 @@
             }
         };
 
-        // ZXing scanner for Create Group
+        // ZXing scanner for Create Group (with Instascan camera selection)
         let createGroupQrCodeReader = null;
 
         window.scanQRForCreateGroup = async function() {
@@ -4302,12 +4312,22 @@
                 videoElement.innerHTML = '';
                 videoElement.appendChild(video);
 
-                // Create ZXing reader - let it handle camera setup with defaults
+                // Use Instascan to find the best camera
+                const cameras = await Instascan.Camera.getCameras();
+                if (cameras.length === 0) {
+                    throw new Error('No cameras found');
+                }
+
+                // Prefer back camera
+                const backCamera = cameras.length > 1 ? cameras[cameras.length - 1] : cameras[0];
+                const cameraId = backCamera.id;
+
+                // Create ZXing reader
                 const codeReader = new ZXing.BrowserQRCodeReader();
                 createGroupQrCodeReader = codeReader;
 
-                // Start scanning - ZXing handles camera access and autofocus
-                codeReader.decodeFromVideoDevice(undefined, video, (result, err) => {
+                // Start scanning with specific camera
+                codeReader.decodeFromVideoDevice(cameraId, video, (result, err) => {
                     if (result && result.text.startsWith('npub1')) {
                         document.getElementById('create-group-first-member').value = result.text;
                         closeCreateGroupQRScanner();
@@ -4336,7 +4356,7 @@
             document.getElementById('create-group-qr-scanner').style.display = 'none';
         };
 
-        // ZXing scanner for Invite Member
+        // ZXing scanner for Invite Member (with Instascan camera selection)
         let inviteQrCodeReader = null;
 
         window.scanQRForInvite = async function() {
@@ -4360,12 +4380,22 @@
                 videoElement.innerHTML = '';
                 videoElement.appendChild(video);
 
-                // Create ZXing reader - let it handle camera setup with defaults
+                // Use Instascan to find the best camera
+                const cameras = await Instascan.Camera.getCameras();
+                if (cameras.length === 0) {
+                    throw new Error('No cameras found');
+                }
+
+                // Prefer back camera
+                const backCamera = cameras.length > 1 ? cameras[cameras.length - 1] : cameras[0];
+                const cameraId = backCamera.id;
+
+                // Create ZXing reader
                 const codeReader = new ZXing.BrowserQRCodeReader();
                 inviteQrCodeReader = codeReader;
 
-                // Start scanning - ZXing handles camera access and autofocus
-                codeReader.decodeFromVideoDevice(undefined, video, (result, err) => {
+                // Start scanning with specific camera
+                codeReader.decodeFromVideoDevice(cameraId, video, (result, err) => {
                     if (result && result.text.startsWith('npub1')) {
                         document.getElementById('invite-member-npub').value = result.text;
                         closeInviteQRScanner();
