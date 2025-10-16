@@ -3575,14 +3575,20 @@
                 // Start ZXing with the specific camera ID
                 codeReader.decodeFromVideoDevice(selectedCameraId, video, (result, err) => {
                     if (result) {
-                        console.log('QR code scanned:', result.text.substring(0, 20) + '...');
+                        console.log('QR code scanned (raw):', result.text);
+                        console.log('QR code length:', result.text.length);
 
                         // Normalize to lowercase first, then strip 'lightning:' prefix if present
                         let invoice = result.text.trim().toLowerCase();
+                        console.log('After trim & lowercase:', invoice);
+                        console.log('Length after trim:', invoice.length);
+
                         if (invoice.startsWith('lightning:')) {
                             invoice = invoice.substring(10);
+                            console.log('After removing lightning: prefix:', invoice);
                         }
 
+                        console.log('Final invoice being set:', invoice);
                         document.getElementById('lightning-invoice-input').value = invoice;
                         decodeLightningInvoice();
                         hideQRScanner();
