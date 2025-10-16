@@ -336,6 +336,9 @@
             transform: translateX(22px);
         }
     </style>
+    <!-- Eruda mobile console for debugging -->
+    <script src="https://cdn.jsdelivr.net/npm/eruda"></script>
+    <script>eruda.init();</script>
 </head>
 <body>
     <div id="header">
@@ -3551,18 +3554,15 @@
                 // Create video element
                 const video = document.createElement('video');
                 video.style.width = '100%';
-                video.style.maxWidth = '400px';
-                video.style.border = '2px solid #0066cc';
-                video.style.borderRadius = '8px';
-                video.style.objectFit = 'contain'; // Show full camera view without cropping
+                video.style.maxWidth = '500px';
                 videoElement.innerHTML = '';
                 videoElement.appendChild(video);
 
-                // Create ZXing reader (it handles the stream itself)
+                // Create ZXing reader - let it use defaults like Firefox does
                 const codeReader = new ZXing.BrowserQRCodeReader();
                 lightningQrCodeReader = codeReader;
 
-                // Start scanning - ZXing gets the video stream automatically
+                // Start scanning - no custom constraints, just like Firefox
                 codeReader.decodeFromVideoDevice(undefined, video, (result, err) => {
                     if (result) {
                         console.log('QR code scanned:', result.text.substring(0, 20) + '...');
@@ -4290,16 +4290,14 @@
                 video.style.width = '100%';
                 video.style.maxWidth = '400px';
                 video.style.border = '2px solid #0066cc';
-                video.style.borderRadius = '8px';
-                video.style.objectFit = 'contain'; // Show full camera view without cropping
                 videoElement.innerHTML = '';
                 videoElement.appendChild(video);
 
-                // Create ZXing reader (it handles the stream itself)
+                // Create ZXing reader - let it handle camera setup with defaults
                 const codeReader = new ZXing.BrowserQRCodeReader();
                 createGroupQrCodeReader = codeReader;
 
-                // Start scanning - ZXing gets the video stream automatically
+                // Start scanning - ZXing handles camera access and autofocus
                 codeReader.decodeFromVideoDevice(undefined, video, (result, err) => {
                     if (result && result.text.startsWith('npub1')) {
                         document.getElementById('create-group-first-member').value = result.text;
@@ -4350,16 +4348,14 @@
                 video.style.width = '100%';
                 video.style.maxWidth = '400px';
                 video.style.border = '2px solid #0066cc';
-                video.style.borderRadius = '8px';
-                video.style.objectFit = 'contain'; // Show full camera view without cropping
                 videoElement.innerHTML = '';
                 videoElement.appendChild(video);
 
-                // Create ZXing reader (it handles the stream itself)
+                // Create ZXing reader - let it handle camera setup with defaults
                 const codeReader = new ZXing.BrowserQRCodeReader();
                 inviteQrCodeReader = codeReader;
 
-                // Start scanning - ZXing gets the video stream automatically
+                // Start scanning - ZXing handles camera access and autofocus
                 codeReader.decodeFromVideoDevice(undefined, video, (result, err) => {
                     if (result && result.text.startsWith('npub1')) {
                         document.getElementById('invite-member-npub').value = result.text;
