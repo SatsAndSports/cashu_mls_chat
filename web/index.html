@@ -15,8 +15,11 @@
     <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png">
     <link rel="apple-touch-icon" href="/icon-192.png">
 
-    <!-- QR Code Scanner Library (ZXing) -->
-    <script src="https://unpkg.com/@zxing/library@latest/umd/index.min.js"></script>
+    <!-- QR Code Scanner Library (qr-scanner) -->
+    <script type="module">
+        import QrScanner from 'https://unpkg.com/qr-scanner@1.4.2/qr-scanner.min.js';
+        window.QrScanner = QrScanner;
+    </script>
     <!-- QR Code Generator Library -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
     <style>
@@ -3535,14 +3538,15 @@
             }
         };
 
-        // ZXing scanner for Lightning invoices
-        let lightningQrCodeReader = null;
+        // qr-scanner for Lightning invoices
+        let lightningQrScanner = null;
 
         window.showQRScanner = async function() {
             // If scanner is already running, just show the container
-            if (lightningQrCodeReader) {
+            if (lightningQrScanner) {
                 console.log('Scanner already active');
                 document.getElementById('qr-scanner-container').style.display = 'block';
+                await lightningQrScanner.start();
                 return;
             }
 
@@ -3558,17 +3562,14 @@
                 videoElement.innerHTML = '';
                 videoElement.appendChild(video);
 
-                // Create ZXing reader - let it use defaults like Firefox does
-                const codeReader = new ZXing.BrowserQRCodeReader();
-                lightningQrCodeReader = codeReader;
-
-                // Start scanning - no custom constraints, just like Firefox
-                codeReader.decodeFromVideoDevice(undefined, video, (result, err) => {
-                    if (result) {
-                        console.log('QR code scanned:', result.text.substring(0, 20) + '...');
+                // Create qr-scanner instance with better autofocus
+                lightningQrScanner = new QrScanner(
+                    video,
+                    result => {
+                        console.log('QR code scanned:', result.data.substring(0, 20) + '...');
 
                         // Strip 'lightning:' prefix if present
-                        let invoice = result.text;
+                        let invoice = result.data;
                         if (invoice.toLowerCase().startsWith('lightning:')) {
                             invoice = invoice.substring(10);
                         }
@@ -3576,8 +3577,16 @@
                         document.getElementById('lightning-invoice-input').value = invoice;
                         decodeLightningInvoice();
                         hideQRScanner();
+                    },
+                    {
+                        returnDetailedScanResult: true,
+                        highlightScanRegion: true,
+                        highlightCodeOutline: true,
                     }
-                });
+                );
+
+                // Start scanning
+                await lightningQrScanner.start();
             } catch (err) {
                 console.error('Failed to start QR scanner:', err);
                 alert('Failed to start camera. Please grant camera permissions.');
@@ -3586,10 +3595,10 @@
         };
 
         window.hideQRScanner = function() {
-            // Stop ZXing reader (this also stops the video stream)
-            if (lightningQrCodeReader) {
-                lightningQrCodeReader.reset();
-                lightningQrCodeReader = null;
+            // Stop qr-scanner
+            if (lightningQrScanner) {
+                lightningQrScanner.stop();
+                lightningQrScanner = null;
             }
 
             // Clear video element
