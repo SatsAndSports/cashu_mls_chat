@@ -1,6 +1,6 @@
 {
-  "name": "MDK Ecash",
-  "short_name": "MDK Ecash",
+  "name": "MLS Cashu",
+  "short_name": "MLS Cashu",
   "description": "Encrypted group messaging with Bitcoin ecash payments",
   "start_url": "/",
   "display": "standalone",
