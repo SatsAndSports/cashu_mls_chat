@@ -290,9 +290,6 @@ where
 pub fn init() {
     // Set panic hook for better error messages in console
     console_error_panic_hook::set_once();
-
-    // Initialize tracing to forward Rust logs to browser console
-    tracing_wasm::set_as_global_default();
 }
 
 /// Generate new Nostr keys and save to localStorage
@@ -525,6 +522,27 @@ pub fn add_trusted_mint(mint_url: String) -> js_sys::Promise {
                 })?;
 
             log(&format!("✅ Mint info received: {:?}", mint_info));
+
+            // Always log mint time comparison
+            if let Some(mint_time) = mint_info.time {
+                let current_time = cdk::util::unix_time();
+                let time_diff = current_time.abs_diff(mint_time);
+                let mint_name = mint_info.name.as_deref().unwrap_or("unknown");
+
+                if time_diff > 30 {
+                    // Log as ERROR in console (red)
+                    web_sys::console::error_1(&JsValue::from_str(&format!(
+                        "Mint '{}' time differs by {} seconds! Mint: {}, Wallet: {}",
+                        mint_name, time_diff, mint_time, current_time
+                    )));
+                } else {
+                    // Normal log
+                    log(&format!(
+                        "Mint '{}' time diff: {} seconds (Mint: {}, Wallet: {})",
+                        mint_name, time_diff, mint_time, current_time
+                    ));
+                }
+            }
 
             // Now add to trusted list
             let storage = get_local_storage()?;
