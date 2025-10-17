@@ -21,13 +21,10 @@
     <!-- QR Code Generator Library -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 
-    <!-- Mobile Debug Console - Add ?debug to URL to enable -->
+    <!-- Mobile Debug Console -->
     <script src="https://cdn.jsdelivr.net/npm/eruda"></script>
     <script>
-        // Enable Eruda if ?debug is in URL
-        if (window.location.search.includes('debug')) {
-            eruda.init();
-        }
+        eruda.init();
     </script>
 
     <style>
