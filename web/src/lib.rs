@@ -290,6 +290,9 @@ where
 pub fn init() {
     // Set panic hook for better error messages in console
     console_error_panic_hook::set_once();
+
+    // Initialize tracing to forward Rust logs to browser console
+    tracing_wasm::set_as_global_default();
 }
 
 /// Generate new Nostr keys and save to localStorage
