@@ -1,6 +1,7 @@
 [submodule "cdk"]
 	path = cdk
-	url = https://github.com/cashubtc/cdk.git
+	url = https://github.com/SatsAndSports/cdk.git
+	branch = mint.time.tolerance
 [submodule "mdk"]
 	path = mdk
 	url = https://github.com/parres-hq/mdk.git
