@@ -1,5 +1,5 @@
 // Service Worker for MDK Ecash PWA
-const CACHE_NAME = 'mdk-ecash-v3-4';
+const CACHE_NAME = 'mdk-ecash-v3-5';
 const urlsToCache = [
   '/',
   '/index.html',
